@@ -1,0 +1,4 @@
+bleak>=0.21
+fastapi>=0.110
+uvicorn[standard]>=0.29
+websockets>=12

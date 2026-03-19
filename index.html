@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Oakford Smoker Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #1a1a1a; color: #e0e0e0;
+      min-height: 100vh; padding: 24px;
+    }
+
+    h1 { font-size: 1.4rem; color: #f97316; margin-bottom: 4px; }
+    .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 20px; }
+
+    .status-bar {
+      background: #111; border: 1px solid #333; border-radius: 8px;
+      padding: 8px 16px; font-size: 0.85rem; margin-bottom: 20px;
+      display: inline-flex; align-items: center; gap: 10px;
+    }
+    .status-wrap { display: flex; justify-content: center; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; flex-shrink: 0; }
+    .dot.connected    { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+    .dot.connecting   { background: #f97316; animation: pulse 0.8s infinite; }
+    .dot.disconnected { background: #ef4444; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    .info-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    .info-pill {
+      background: #0f1f2e; border: 1px solid #1e3a5f;
+      border-radius: 8px; padding: 8px 14px;
+      font-size: 0.78rem; color: #93c5fd;
+    }
+    .info-pill strong { color: #e0e0e0; }
+
+    .dash {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 16px; margin-bottom: 20px;
+    }
+    .temp-card { width: 160px; }
+    .temp-card {
+      background: #111; border: 1px solid #2a2a2a; border-radius: 12px;
+      padding: 16px; text-align: center;
+    }
+    .temp-card.grill        { border-color: #3b82f6; }
+    .temp-card.probe.active  { border-color: #ef4444; }
+    .temp-card.probe2.active { border-color: #facc15; }
+
+    .temp-label   { font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: 0.08em; color: #888; margin-bottom: 8px; }
+    .temp-val-row { display: flex; align-items: baseline; justify-content: center; gap: 4px; }
+    .temp-val     { font-size: 2.4rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+    .temp-unit    { font-size: 0.9rem; color: #666; }
+    .temp-set     { font-size: 0.72rem; color: #888; margin-top: 6px; }
+    .temp-eta     { font-size: 0.7rem; color: #555; margin-top: 3px; font-style: italic; }
+
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); border-color: rgba(239,68,68,0.3); }
+      50%       { box-shadow: 0 0 12px 4px rgba(239,68,68,0.6); border-color: rgba(239,68,68,0.9); }
+    }
+    @keyframes pulse-yellow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(234,179,8,0); border-color: rgba(234,179,8,0.3); }
+      50%       { box-shadow: 0 0 12px 4px rgba(234,179,8,0.6); border-color: rgba(234,179,8,0.9); }
+    }
+    @keyframes pulse-blue {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); border-color: rgba(59,130,246,0.3); }
+      50%       { box-shadow: 0 0 12px 4px rgba(59,130,246,0.6); border-color: rgba(59,130,246,0.9); }
+    }
+    .over-temp-p1    { animation: pulse-red    1.2s ease-in-out infinite; }
+    .over-temp-p2    { animation: pulse-yellow 1.2s ease-in-out infinite; }
+    .over-temp-grill { animation: pulse-blue   1.2s ease-in-out infinite; }
+
+    .temp-na      { color: #333; }
+
+    .grill        .temp-val { color: #3b82f6; }
+    .probe.active  .temp-val { color: #ef4444; }
+    .probe2.active .temp-val { color: #facc15; }
+
+    .chart-panel {
+      background: #111; border: 1px solid #2a2a2a; border-radius: 10px;
+      padding: 16px; margin-bottom: 16px;
+    }
+    .chart-panel canvas { max-height: 300px; }
+
+    .panel { background: #111; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
+    .panel-header {
+      background: #1e1e1e; padding: 10px 16px; font-size: 0.8rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em; color: #888;
+      border-bottom: 1px solid #2a2a2a;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    #log { font-family: monospace; font-size: 0.75rem; line-height: 1.6;
+           max-height: 280px; overflow-y: auto; padding: 8px 12px; }
+    .log-entry { display: flex; gap: 10px; padding: 2px 4px; border-radius: 4px; }
+    .log-entry:hover { background: #1a1a1a; }
+    .log-ts  { color: #555; flex-shrink: 0; }
+    .log-tag { flex-shrink: 0; font-weight: 700; min-width: 70px; text-align: right; }
+    .log-msg { color: #ccc; word-break: break-all; }
+    .tag-info  { color: #3b82f6; }
+    .tag-data  { color: #3b82f6; }
+    .tag-warn  { color: #f97316; }
+    .tag-error { color: #ef4444; }
+    .tag-sys   { color: #a78bfa; }
+    .tag-alarm { color: #facc15; font-weight: 800; }
+    .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: #2a2a2a; color: #888; }
+  </style>
+</head>
+<body>
+
+<div class="status-wrap">
+  <div class="status-bar">
+    <div class="dot connecting" id="statusDot"></div>
+    <span id="statusText">Connecting…</span>
+  </div>
+</div>
+
+
+<div class="dash">
+  <div class="temp-card grill" id="cardGrill">
+    <div class="temp-label">Smoker</div>
+    <div class="temp-val-row">
+      <div class="temp-val temp-na" id="valGrill">N/A</div>
+      <div class="temp-unit">°F</div>
+    </div>
+    <div class="temp-set" id="setGrill"></div>
+    <div class="temp-eta" id="grillAtTempTimer"></div>
+  </div>
+  <div class="temp-card probe" id="cardP1">
+    <div class="temp-label">Probe 1</div>
+    <div class="temp-val-row">
+      <div class="temp-val temp-na" id="valP1">N/A</div>
+      <div class="temp-unit">°F</div>
+    </div>
+    <div class="temp-set" id="targetP1"></div>
+    <div class="temp-eta" id="etaP1"></div>
+  </div>
+  <div class="temp-card probe probe2" id="cardP2">
+    <div class="temp-label">Probe 2</div>
+    <div class="temp-val-row">
+      <div class="temp-val temp-na" id="valP2">N/A</div>
+      <div class="temp-unit">°F</div>
+    </div>
+    <div class="temp-set" id="targetP2"></div>
+    <div class="temp-eta" id="etaP2"></div>
+  </div>
+</div>
+
+<div class="chart-panel">
+  <canvas id="tempChart"></canvas>
+</div>
+
+<div class="panel">
+  <div class="panel-header" onclick="toggleLog()" style="cursor:pointer;user-select:none;">
+    <span>Log <span class="badge" id="logCount">0</span></span>
+    <span style="display:flex;gap:8px;align-items:center;">
+      <button onclick="event.stopPropagation();clearLog()" style="background:#222;color:#888;border:1px solid #333;border-radius:6px;padding:2px 10px;font-size:0.72rem;cursor:pointer;">Clear</button>
+      <span id="logChevron" style="color:#555;font-size:0.8rem;">▶</span>
+    </span>
+  </div>
+  <div id="logBody" style="display:none">
+    <div style="padding:8px 12px 4px;border-bottom:1px solid #1e1e1e;">
+      <span style="font-size:0.75rem;color:#555;">Smoker IP: <strong id="infoIp" style="color:#93c5fd;">—</strong></span>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const PROBE_DISCONNECTED = 999;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const pad = n => String(n).padStart(2,'0');
+function ts() {
+  const d = new Date();
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+let logEntries = 0;
+function log(tag, msg, cls='tag-info') {
+  const c = document.getElementById('log');
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  el.innerHTML = `<span class="log-ts">${ts()}</span><span class="log-tag ${cls}">[${tag}]</span><span class="log-msg">${esc(msg)}</span>`;
+  c.appendChild(el);
+  c.scrollTop = c.scrollHeight;
+  document.getElementById('logCount').textContent = ++logEntries;
+}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function setStatus(cls, text) {
+  document.getElementById('statusDot').className = 'dot ' + cls;
+  document.getElementById('statusText').textContent = text;
+}
+function toggleLog() {
+  const body    = document.getElementById('logBody');
+  const chevron = document.getElementById('logChevron');
+  const collapsed = body.style.display === 'none';
+  body.style.display  = collapsed ? '' : 'none';
+  chevron.textContent = collapsed ? '▼' : '▶';
+}
+function clearLog() {
+  document.getElementById('log').innerHTML = '';
+  logEntries = 0;
+  document.getElementById('logCount').textContent = 0;
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+const chartLabels = [];
+const DS = {
+  grill:       [],
+  grillTarget: [],
+  p1:          [],
+  p1Target:    [],
+  p2:          [],
+  p2Target:    [],
+};
+
+function makeDataset(label, data, color, dashed) {
+  return {
+    label, data, borderColor: color, backgroundColor: 'transparent',
+    borderWidth: dashed ? 1 : 2,
+    borderDash: dashed ? [6, 4] : [],
+    pointRadius: dashed ? 0 : 3,
+    pointHoverRadius: dashed ? 0 : 5,
+    tension: 0.3, spanGaps: true,
+  };
+}
+
+const chart = new Chart(document.getElementById('tempChart'), {
+  type: 'line',
+  data: {
+    labels: chartLabels,
+    datasets: [
+      makeDataset('Grill',          DS.grill,       '#3b82f6', false),
+      makeDataset('Grill Target',   DS.grillTarget, '#3b82f6', true),
+      makeDataset('Probe 1',        DS.p1,          '#ef4444', false),
+      makeDataset('Probe 1 Target', DS.p1Target,    '#ef4444', true),
+      makeDataset('Probe 2',        DS.p2,          '#facc15', false),
+      makeDataset('Probe 2 Target', DS.p2Target,    '#facc15', true),
+    ],
+  },
+  options: {
+    responsive: true, animation: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: '#1e1e1e' } },
+      y: { ticks: { color: '#666', callback: v => `${v}°F` }, grid: { color: '#1e1e1e' }, beginAtZero: false },
+    },
+    plugins: {
+      legend: { labels: { color: '#888', boxWidth: 20, padding: 16 } },
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}°F` } },
+    },
+  },
+});
+
+function pushChartPoint(d) {
+  chartLabels.push(ts());
+  DS.grill.push(d.grill);
+  DS.grillTarget.push(d.setPoint);
+  DS.p1.push(d.probes[0] < PROBE_DISCONNECTED ? d.probes[0] : null);
+  DS.p1Target.push(d.probes[0] < PROBE_DISCONNECTED && d.probeTargets[0] < PROBE_DISCONNECTED ? d.probeTargets[0] : null);
+  DS.p2.push(d.probes[1] < PROBE_DISCONNECTED ? d.probes[1] : null);
+  DS.p2Target.push(d.probes[1] < PROBE_DISCONNECTED && d.probeTargets[1] < PROBE_DISCONNECTED ? d.probeTargets[1] : null);
+  chart.update();
+}
+
+// ── Dashboard update ──────────────────────────────────────────────────────────
+function updateDash(d) {
+  document.getElementById('valGrill').textContent  = d.grill;
+  document.getElementById('valGrill').classList.remove('temp-na');
+  document.getElementById('setGrill').textContent  = `Target: ${d.setPoint}°F`;
+
+  d.probes.forEach((p, i) => {
+    const cardEl   = document.getElementById(`cardP${i+1}`);
+    const target   = d.probeTargets[i];
+    if (p >= PROBE_DISCONNECTED) {
+      cardEl.style.display = 'none';
+      cardEl.classList.remove('active');
+    } else {
+      cardEl.style.display = '';
+      cardEl.classList.add('active');
+      document.getElementById(`valP${i+1}`).textContent    = p;
+      document.getElementById(`valP${i+1}`).classList.remove('temp-na');
+      document.getElementById(`targetP${i+1}`).textContent = target < PROBE_DISCONNECTED ? `Target: ${target}°F` : '';
+      updateEta(i, p, target);
+    }
+  });
+
+  if (d.ip) {
+    document.getElementById('infoIp').textContent = d.ip;
+  }
+}
+
+// ── ETA estimator ─────────────────────────────────────────────────────────────
+const HISTORY_MAX  = 10;
+const probeHistory = [[], []];
+
+function calcEta(history, currentTemp, target, elId, atTempThreshold = 0) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+
+  if (currentTemp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) {
+    el.textContent = '';
+    el.closest('.temp-card')?.classList.remove('over-temp-p1', 'over-temp-p2');
+    return;
+  }
+
+  const card      = el.closest('.temp-card');
+  const overClass = card && card.classList.contains('probe2') ? 'over-temp-p2' : 'over-temp-p1';
+  if (currentTemp > target + 5) {
+    el.innerHTML = '⚠️ <strong style="color:#ef4444">Over Temperature</strong>';
+    el.style.color = '';
+    el.style.fontWeight = '';
+    if (card) card.classList.add(overClass);
+    return;
+  }
+
+  el.style.color = '';
+  el.style.fontWeight = '';
+  if (card) card.classList.remove('over-temp-p1', 'over-temp-p2');
+
+  if (currentTemp >= target) { el.textContent = 'At Temperature'; return; }
+
+  history.push({ temp: currentTemp, time: Date.now() });
+  if (history.length > HISTORY_MAX) history.shift();
+
+  if (history.length < 2) { el.textContent = 'Estimating…'; return; }
+
+  const oldest    = history[0];
+  const newest    = history[history.length - 1];
+  const ratePerMs = (newest.temp - oldest.temp) / (newest.time - oldest.time);
+
+  if (ratePerMs <= 0) { el.textContent = 'Estimating…'; return; }
+
+  const minRemaining = Math.round(((target - currentTemp) / ratePerMs) / 60000);
+
+  if (minRemaining < 1)       el.textContent = 'ETA < 1 min';
+  else if (minRemaining < 60) el.textContent = `ETA ~${minRemaining} min`;
+  else {
+    const h = Math.floor(minRemaining / 60);
+    const m = minRemaining % 60;
+    el.textContent = m > 0 ? `ETA ~${h}h ${m}m` : `ETA ~${h}h`;
+  }
+}
+
+function updateEta(probeIndex, currentTemp, target) {
+  if (currentTemp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) {
+    document.getElementById(`etaP${probeIndex + 1}`).textContent = ''; return;
+  }
+  calcEta(probeHistory[probeIndex], currentTemp, target, `etaP${probeIndex + 1}`);
+}
+
+// ── Alarms ────────────────────────────────────────────────────────────────────
+const alarmFired        = [false, false];
+const overTempFired     = [false, false];
+const overTempInterval  = [null,  null];
+let   grillAlarmFired      = false;
+let   grillOverTempFired   = false;
+let   grillOverTempInterval = null;
+let   grillAtTempSince  = null;   // timestamp when smoker first reached target
+let   grillAtTempTick   = null;   // setInterval handle
+
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function startGrillAtTempTimer() {
+  if (grillAtTempTick) return;
+  grillAtTempSince = Date.now();
+  const el = document.getElementById('grillAtTempTimer');
+  grillAtTempTick = setInterval(() => {
+    el.textContent = `At temp for ${formatDuration(Date.now() - grillAtTempSince)}`;
+  }, 1000);
+}
+
+function stopGrillAtTempTimer() {
+  clearInterval(grillAtTempTick);
+  grillAtTempTick  = null;
+  grillAtTempSince = null;
+  document.getElementById('grillAtTempTimer').textContent = '';
+}
+
+function startGrillOverTempAlarm() {
+  if (grillOverTempInterval) return;
+  stopGrillAtTempTimer();
+  const el = document.getElementById('grillAtTempTimer');
+  el.innerHTML = '⚠️ <strong style="color:#ef4444">Over Temperature</strong>';
+  document.getElementById('cardGrill').classList.add('over-temp-grill');
+  playSiren();
+  grillOverTempInterval = setInterval(playSiren, 30_000);
+}
+
+function clearGrillOverTempAlarm() {
+  clearInterval(grillOverTempInterval);
+  grillOverTempInterval = null;
+  grillOverTempFired    = false;
+  document.getElementById('cardGrill').classList.remove('over-temp-grill');
+  document.getElementById('grillAtTempTimer').textContent = '';
+}
+
+function startOverTempAlarm(i) {
+  if (overTempInterval[i]) return;
+  playSiren();
+  overTempInterval[i] = setInterval(playSiren, 30_000);
+}
+
+function clearOverTempAlarm(i) {
+  clearInterval(overTempInterval[i]);
+  overTempInterval[i] = null;
+  overTempFired[i] = false;
+}
+
+// Single shared AudioContext — unlocked on any user interaction
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+document.addEventListener('click', () => audioCtx.resume());
+
+async function playSiren(durationSec = 2.5) {
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + durationSec);
+
+  const steps = Math.floor(durationSec / 0.3);
+  for (let i = 0; i < steps; i++) {
+    const t = audioCtx.currentTime + i * 0.3;
+    osc.frequency.setValueAtTime(i % 2 === 0 ? 1050 : 750, t);
+  }
+
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + durationSec);
+}
+
+function announce(msg) {
+  log('ALARM', msg, 'tag-alarm');
+  const utt = new SpeechSynthesisUtterance(msg);
+  utt.rate = 0.95;
+  speechSynthesis.speak(utt);
+}
+
+function checkAlarms(d) {
+  // Smoker alarm
+  if (!grillOverTempFired && d.grill > d.setPoint + 5) {
+    grillOverTempFired = true;
+    startGrillOverTempAlarm();
+  }
+  if (grillOverTempFired && d.grill <= d.setPoint + 5) {
+    clearGrillOverTempAlarm();
+  }
+
+  const grillAtTemp    = !grillOverTempFired && Math.abs(d.grill - d.setPoint) <= 5;
+  const grillUnderTemp = !grillOverTempFired && d.grill < d.setPoint - 5;
+
+  if (grillAtTemp) {
+    startGrillAtTempTimer();
+    document.getElementById('grillAtTempTimer').style.cssText = '';
+    if (!grillAlarmFired) {
+      grillAlarmFired = true;
+      announce(`The smoker has reached its set temperature of ${d.setPoint} degrees.`);
+    }
+  } else if (grillUnderTemp) {
+    stopGrillAtTempTimer();
+    grillAlarmFired = false;
+    const el = document.getElementById('grillAtTempTimer');
+    el.innerHTML = '<strong style="color:#facc15;font-weight:bold">Under Temperature</strong>';
+  } else if (!grillOverTempFired) {
+    stopGrillAtTempTimer();
+    document.getElementById('grillAtTempTimer').textContent = '';
+  }
+
+  // Probe alarms
+  d.probes.forEach((temp, i) => {
+    const target = d.probeTargets[i];
+    if (temp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) return;
+
+    if (!alarmFired[i] && temp >= target) {
+      alarmFired[i] = true;
+      announce(`Probe ${i + 1} has reached its target temperature of ${target} degrees.`);
+    }
+    if (alarmFired[i] && temp < target - 5) alarmFired[i] = false;
+
+    if (!overTempFired[i] && temp > target + 5) {
+      overTempFired[i] = true;
+      startOverTempAlarm(i);
+    }
+    if (overTempFired[i] && temp <= target + 5) {
+      clearOverTempAlarm(i);
+    }
+  });
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+  const wsUrl = `ws://${location.host}/ws`;
+  log('SYS', `Connecting to ${wsUrl}…`, 'tag-sys');
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    setStatus('connected', 'Connected');
+    log('SYS', 'WebSocket connected.', 'tag-sys');
+  };
+
+  ws.onmessage = ({ data }) => {
+    const d = JSON.parse(data);
+    if (d.smoker_offline) {
+      setStatus('connecting', 'Smoker unreachable…');
+      return;
+    }
+    if (d.error) {
+      log('ERROR', d.error, 'tag-error');
+      return;
+    }
+    setStatus('connected', 'Connected');
+    updateDash(d);
+    pushChartPoint(d);
+    checkAlarms(d);
+    const probesStr = d.probes.map((p, i) =>
+      p >= PROBE_DISCONNECTED ? 'NC' : `${p}°F → ${d.probeTargets[i]}°F`
+    ).join(', ');
+    log('DATA', `Grill: ${d.grill}°F  Set: ${d.setPoint}°F  Probes: [${probesStr}]`, 'tag-data');
+  };
+
+  ws.onclose = () => {
+    setStatus('disconnected', 'Disconnected — reconnecting in 5s…');
+    log('WARN', 'WebSocket closed. Reconnecting…', 'tag-warn');
+    setTimeout(connect, 5000);
+  };
+
+  ws.onerror = () => {
+    setStatus('disconnected', 'Connection error — reconnecting in 5s…');
+  };
+
+  // Send a ping every 30s to keep the connection alive through proxies
+  const ping = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+    else clearInterval(ping);
+  }, 30000);
+}
+
+connect();
+</script>
+</body>
+</html>

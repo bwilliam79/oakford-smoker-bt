@@ -1,0 +1,160 @@
+"""
+Oakford Smoker Monitor — BLE poller + WebSocket server
+Usage: python3 server.py [--interval 30] [--port 8080]
+"""
+import asyncio
+import json
+import logging
+import argparse
+from pathlib import Path
+
+from bleak import BleakScanner, BleakClient, BleakError
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+import uvicorn
+
+# ── BLE UUIDs ────────────────────────────────────────────────────────────────
+CHAR_IP   = '0000bb01-0000-1000-8000-00805f9b34fb'
+CHAR_TEMP = '0000cc01-0000-1000-8000-00805f9b34fb'
+
+PROBE_DISCONNECTED = 999
+TARGET_PREFIX      = 'NXE'
+
+log = logging.getLogger('smoker')
+
+# ── Packet decoder ────────────────────────────────────────────────────────────
+def read_u16_le(data: bytes, offset: int) -> int:
+    return data[offset] | (data[offset + 1] << 8)
+
+def decode_packet(data: bytes):
+    if len(data) < 20:
+        return None
+    return {
+        'setPoint':     read_u16_le(data, 4),
+        'grill':        read_u16_le(data, 6),
+        'probeTargets': [read_u16_le(data, 8),  read_u16_le(data, 10)],
+        'probes':       [read_u16_le(data, 16), read_u16_le(data, 18)],
+    }
+
+# ── App state ─────────────────────────────────────────────────────────────────
+app      = FastAPI()
+clients: set[WebSocket] = set()
+state    = {'last': None, 'ip': None, 'address': None}
+
+# ── WebSocket broadcast ───────────────────────────────────────────────────────
+async def broadcast(msg: dict):
+    if not clients:
+        return
+    text = json.dumps(msg)
+    dead = set()
+    for ws in clients:
+        try:
+            await ws.send_text(text)
+        except Exception:
+            dead.add(ws)
+    clients.difference_update(dead)
+
+# ── BLE polling loop ──────────────────────────────────────────────────────────
+async def find_smoker():
+    print(f'Scanning for smoker ({TARGET_PREFIX}*)…')
+    devices = await BleakScanner.discover(timeout=12)
+    match = next((d for d in devices if d.name and d.name.startswith(TARGET_PREFIX)), None)
+    if match:
+        print(f'Found: {match.name}  ({match.address})')
+        return match.address
+    return None
+
+async def poll_loop(address: str, interval: int):
+    smoker_was_offline = False
+    while True:
+        try:
+            async with BleakClient(address, timeout=15) as client:
+                # Read IP once
+                if not state['ip']:
+                    try:
+                        raw_ip = await client.read_gatt_char(CHAR_IP)
+                        state['ip'] = ''.join(chr(b) for b in raw_ip if 32 <= b < 127)
+                        print(f'Smoker IP: {state["ip"]}')
+                    except Exception:
+                        pass
+
+                raw = await client.read_gatt_char(CHAR_TEMP)
+                dec = decode_packet(bytes(raw))
+
+            if dec:
+                if smoker_was_offline:
+                    print('Smoker reconnected.')
+                    smoker_was_offline = False
+                dec['ip'] = state['ip']
+                state['last'] = dec
+                await broadcast(dec)
+                probes_str = ', '.join(
+                    f'{p}°F → {dec["probeTargets"][i]}°F' if p < PROBE_DISCONNECTED else 'NC'
+                    for i, p in enumerate(dec['probes'])
+                )
+                log.info(f'Smoker: {dec["grill"]}°F  Set: {dec["setPoint"]}°F  Probes: [{probes_str}]')
+
+        except (BleakError, Exception):
+            await broadcast({'smoker_offline': True})
+            if not smoker_was_offline:
+                print('Smoker unreachable — will keep retrying.')
+                smoker_was_offline = True
+
+        await asyncio.sleep(interval)
+
+# ── HTTP / WebSocket routes ───────────────────────────────────────────────────
+@app.get('/')
+async def index():
+    return HTMLResponse(Path('index.html').read_text())
+
+@app.get('/api/state')
+async def api_state():
+    return state['last'] or {}
+
+@app.websocket('/ws')
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    clients.add(ws)
+    log.info(f'Client connected  ({len(clients)} total)')
+    if state['last']:
+        await ws.send_text(json.dumps(state['last']))
+    try:
+        while True:
+            await ws.receive_text()  # keep-alive (pings)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        clients.discard(ws)
+        log.info(f'Client disconnected  ({len(clients)} total)')
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+async def main(interval: int, port: int):
+    address = await find_smoker()
+    if not address:
+        print('Smoker not found — make sure it is powered on and in range.')
+        return
+
+    state['address'] = address
+    print(f'Starting web server on http://0.0.0.0:{port}')
+
+    server_cfg = uvicorn.Config(app, host='0.0.0.0', port=port, log_level='warning')
+    server     = uvicorn.Server(server_cfg)
+
+    await asyncio.gather(
+        poll_loop(address, interval),
+        server.serve(),
+    )
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Oakford Smoker Monitor')
+    parser.add_argument('--interval', type=int,  default=30,   help='Poll interval in seconds (default: 30)')
+    parser.add_argument('--port',     type=int,  default=8080, help='Web server port (default: 8080)')
+    parser.add_argument('--debug',    action='store_true',     help='Enable verbose logging')
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO if args.debug else logging.WARNING,
+        format='%(asctime)s  %(levelname)-8s  %(message)s',
+        datefmt='%H:%M:%S',
+    )
+    asyncio.run(main(args.interval, args.port))
