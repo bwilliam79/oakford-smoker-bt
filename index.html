@@ -254,7 +254,9 @@ const chart = new Chart(document.getElementById('tempChart'), {
       y: { ticks: { color: '#666', callback: v => `${v}°F` }, grid: { color: '#1e1e1e' }, beginAtZero: false },
     },
     plugins: {
-      legend: { labels: { color: '#888', boxWidth: 20, padding: 16 } },
+      legend: { labels: { color: '#888', boxWidth: 20, padding: 16,
+        filter: (item, data) => data.datasets[item.datasetIndex].data.some(v => v !== null)
+      } },
       tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}°F` } },
     },
   },
