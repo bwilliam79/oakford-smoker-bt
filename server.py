@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import argparse
+import math
 import time
 from pathlib import Path
 
@@ -56,6 +57,13 @@ async def broadcast(msg: dict):
             dead.add(ws)
     clients.difference_update(dead)
 
+# ── Clock-aligned sleep ───────────────────────────────────────────────────────
+async def sleep_to_next_tick(interval: int) -> None:
+    """Sleep until the next wall-clock multiple of *interval* seconds."""
+    now   = time.time()
+    delta = math.ceil(now / interval) * interval - now
+    await asyncio.sleep(max(delta, 0.001))
+
 # ── BLE polling loop ──────────────────────────────────────────────────────────
 async def find_smoker():
     print(f'Scanning for smoker ({TARGET_PREFIX}*)…')
@@ -68,6 +76,8 @@ async def find_smoker():
 
 async def poll_loop(interval: int):
     smoker_was_offline = False
+    await sleep_to_next_tick(interval)
+    print(f'Polling aligned — first tick at {time.strftime("%H:%M:%S")}')
     while True:
         # Discover smoker if we don't have an address yet
         if not state['address']:
@@ -77,7 +87,7 @@ async def poll_loop(interval: int):
                 if not smoker_was_offline:
                     print('Smoker not found — will keep retrying.')
                     smoker_was_offline = True
-                await asyncio.sleep(interval)
+                await sleep_to_next_tick(interval)
                 continue
 
         try:
@@ -120,7 +130,7 @@ async def poll_loop(interval: int):
             # Clear address so next iteration re-scans
             state['address'] = None
 
-        await asyncio.sleep(interval)
+        await sleep_to_next_tick(interval)
 
 # ── HTTP / WebSocket routes ───────────────────────────────────────────────────
 @app.get('/')
