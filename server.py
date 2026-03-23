@@ -119,7 +119,7 @@ async def poll_loop(interval: int):
 # ── HTTP / WebSocket routes ───────────────────────────────────────────────────
 @app.get('/')
 async def index():
-    return HTMLResponse(Path('index.html').read_text())
+    return HTMLResponse(Path('index.html').read_text(encoding='utf-8'))
 
 @app.get('/api/state')
 async def api_state():
