@@ -79,6 +79,9 @@ async def poll_loop(interval: int):
     await sleep_to_next_tick(interval)
     print(f'Polling aligned — first tick at {time.strftime("%H:%M:%S")}')
     while True:
+        # Snap tick_time to the current boundary so timestamps are always clean
+        tick_time = math.floor(time.time() / interval) * interval
+
         # Discover smoker if we don't have an address yet
         if not state['address']:
             state['address'] = await find_smoker()
@@ -87,7 +90,7 @@ async def poll_loop(interval: int):
                 if not smoker_was_offline:
                     print('Smoker not found — will keep retrying.')
                     smoker_was_offline = True
-                await sleep_to_next_tick(interval)
+                await asyncio.sleep(tick_time + interval - time.time())
                 continue
 
         try:
@@ -110,7 +113,7 @@ async def poll_loop(interval: int):
                     smoker_was_offline = False
                 dec['ip']      = state['ip']
                 dec['address'] = state['address']
-                dec['ts']      = time.time()
+                dec['ts']      = tick_time
                 state['last']  = dec
                 state['history'].append(dec)
                 cutoff = time.time() - HISTORY_MAX_AGE
@@ -130,7 +133,9 @@ async def poll_loop(interval: int):
             # Clear address so next iteration re-scans
             state['address'] = None
 
-        await sleep_to_next_tick(interval)
+        # Sleep until the next tick boundary relative to when this tick started
+        sleep_for = tick_time + interval - time.time()
+        await asyncio.sleep(max(sleep_for, 0.001))
 
 # ── HTTP / WebSocket routes ───────────────────────────────────────────────────
 @app.get('/')
