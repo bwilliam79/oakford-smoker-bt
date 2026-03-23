@@ -166,6 +166,7 @@
     <div style="padding:8px 12px 4px;border-bottom:1px solid #1e1e1e;">
       <span style="font-size:0.75rem;color:#555;">Smoker IP: <strong id="infoIp" style="color:#93c5fd;">—</strong></span>
       <span style="font-size:0.75rem;color:#555;margin-left:16px;">BT Address: <strong id="infoBtMac" style="color:#93c5fd;">—</strong></span>
+      <span style="font-size:0.75rem;color:#555;margin-left:16px;">Poll Interval: <strong id="infoInterval" style="color:#93c5fd;">—</strong></span>
     </div>
     <div id="log"></div>
   </div>
@@ -181,11 +182,11 @@ function fmtTime(d) {
 }
 function ts() { return fmtTime(new Date()); }
 let logEntries = 0;
-function log(tag, msg, cls='tag-info') {
+function log(tag, msg, cls='tag-info', date = new Date()) {
   const c = document.getElementById('log');
   const el = document.createElement('div');
   el.className = 'log-entry';
-  el.innerHTML = `<span class="log-ts">${ts()}</span><span class="log-tag ${cls}">[${tag}]</span><span class="log-msg">${esc(msg)}</span>`;
+  el.innerHTML = `<span class="log-ts">${fmtTime(date)}</span><span class="log-tag ${cls}">[${tag}]</span><span class="log-msg">${esc(msg)}</span>`;
   c.appendChild(el);
   c.scrollTop = c.scrollHeight;
   document.getElementById('logCount').textContent = ++logEntries;
@@ -302,8 +303,9 @@ function updateDash(d) {
     }
   });
 
-  if (d.ip)      document.getElementById('infoIp').textContent    = d.ip;
-  if (d.address) document.getElementById('infoBtMac').textContent = d.address;
+  if (d.ip)       document.getElementById('infoIp').textContent       = d.ip;
+  if (d.address)  document.getElementById('infoBtMac').textContent   = d.address;
+  if (d.interval) document.getElementById('infoInterval').textContent = `${d.interval}s`;
 }
 
 // ── ETA estimator ─────────────────────────────────────────────────────────────
@@ -518,6 +520,8 @@ function connect() {
   log('SYS', `Connecting to ${wsUrl}…`, 'tag-sys');
   const ws = new WebSocket(wsUrl);
 
+  let smokerWasOffline = false;
+
   ws.onopen = () => {
     setStatus('connected', 'Connected');
     log('SYS', 'WebSocket connected.', 'tag-sys');
@@ -528,11 +532,17 @@ function connect() {
     if (d.type === 'history') {
       d.data.forEach(pt => pushChartPoint(pt, new Date(pt.ts * 1000), true));
       chart.update();
-      if (d.data.length) updateDash(d.data[d.data.length - 1]);
-      log('SYS', `Loaded ${d.data.length} historical data point(s).`, 'tag-sys');
+      if (d.data.length) {
+        updateDash(d.data[d.data.length - 1]);
+        log('SYS', `Loaded ${d.data.length} historical data point(s).`, 'tag-sys');
+      }
       return;
     }
     if (d.smoker_offline) {
+      if (!smokerWasOffline) {
+        smokerWasOffline = true;
+        log('WARN', 'Smoker offline — retrying…', 'tag-warn');
+      }
       setStatus('connecting', 'Smoker unreachable…');
       return;
     }
@@ -540,14 +550,15 @@ function connect() {
       log('ERROR', d.error, 'tag-error');
       return;
     }
+    const tickDate = new Date(d.ts * 1000);
+    if (smokerWasOffline) {
+      smokerWasOffline = false;
+      log('SYS', 'Smoker reconnected.', 'tag-sys', tickDate);
+    }
     setStatus('connected', 'Connected');
     updateDash(d);
-    pushChartPoint(d);
+    pushChartPoint(d, tickDate);
     checkAlarms(d);
-    const probesStr = d.probes.map((p, i) =>
-      p >= PROBE_DISCONNECTED ? 'NC' : `${p}°F → ${d.probeTargets[i]}°F`
-    ).join(', ');
-    log('DATA', `Grill: ${d.grill}°F  Set: ${d.setPoint}°F  Probes: [${probesStr}]`, 'tag-data');
   };
 
   ws.onclose = () => {

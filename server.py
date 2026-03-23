@@ -42,7 +42,7 @@ def decode_packet(data: bytes):
 # ── App state ─────────────────────────────────────────────────────────────────
 app      = FastAPI()
 clients: set[WebSocket] = set()
-state    = {'last': None, 'ip': None, 'address': None, 'history': []}
+state    = {'last': None, 'ip': None, 'address': None, 'history': [], 'interval': 30}
 
 # ── WebSocket broadcast ───────────────────────────────────────────────────────
 async def broadcast(msg: dict):
@@ -114,6 +114,7 @@ async def poll_loop(interval: int):
                 dec['ip']      = state['ip']
                 dec['address'] = state['address']
                 dec['ts']      = tick_time
+                dec['interval'] = state['interval']
                 state['last']  = dec
                 state['history'].append(dec)
                 cutoff = time.time() - HISTORY_MAX_AGE
@@ -166,6 +167,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 async def main(interval: int, port: int, address: str | None):
+    state['interval'] = interval
     if address:
         print(f'Using hardcoded address: {address}')
         state['address'] = address
