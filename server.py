@@ -222,6 +222,7 @@ async def main(interval: int, port: int, address: str | None, adapter: str | Non
     if adapter:
         print(f'Using adapter: {adapter}')
         state['adapter'] = adapter
+        add_log('SYS', f'Using BT adapter: {adapter}', 'tag-sys', time.time())
 
     print(f'Starting web server on http://0.0.0.0:{port}')
 
