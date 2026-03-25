@@ -75,7 +75,7 @@ async def find_smoker():
     print(f'Scanning for smoker ({TARGET_PREFIX}*)…')
     kwargs = {'timeout': 12, 'scanning_mode': 'active'}
     if state['adapter']:
-        kwargs['adapter'] = state['adapter']
+        kwargs['bluez'] = {'adapter': state['adapter']}
     devices = await BleakScanner.discover(**kwargs)
     match = next((d for d in devices if d.name and d.name.startswith(TARGET_PREFIX)), None)
     if match:
@@ -96,7 +96,7 @@ async def read_rssi(address: str, timeout: float = 5.0) -> int | None:
 
     kwargs = {'scanning_mode': 'active'}
     if state['adapter']:
-        kwargs['adapter'] = state['adapter']
+        kwargs['bluez'] = {'adapter': state['adapter']}
     async with BleakScanner(callback, **kwargs):
         try:
             await asyncio.wait_for(found.wait(), timeout=timeout)
@@ -133,7 +133,7 @@ async def poll_loop(interval: int):
 
             kwargs = {'timeout': 15}
             if state['adapter']:
-                kwargs['adapter'] = state['adapter']
+                kwargs['bluez'] = {'adapter': state['adapter']}
             async with BleakClient(state['address'], **kwargs) as client:
                 # Read IP once
                 if not state['ip']:
