@@ -150,50 +150,32 @@
     .probe2.active .temp-val { color: #facc15; }
 
     .chart-panel {
-      background:
-        repeating-linear-gradient(93deg,
-          transparent 0, transparent 14px,
-          rgba(200,110,30,0.13) 14px, rgba(200,110,30,0.13) 15px,
-          transparent 15px, transparent 30px,
-          rgba(0,0,0,0.18) 30px, rgba(0,0,0,0.18) 31px
-        ),
-        linear-gradient(170deg, #3a1c08 0%, #2a1206 100%);
-      border: 1px solid #5a2e0e; border-radius: 10px;
+      background: #111; border: 1px solid #2a2a2a; border-radius: 10px;
       padding: 16px; margin-bottom: 16px;
     }
     .chart-panel canvas { max-height: 300px; }
 
-    .panel {
-      background:
-        repeating-linear-gradient(93deg,
-          transparent 0, transparent 14px,
-          rgba(200,110,30,0.13) 14px, rgba(200,110,30,0.13) 15px,
-          transparent 15px, transparent 30px,
-          rgba(0,0,0,0.18) 30px, rgba(0,0,0,0.18) 31px
-        ),
-        linear-gradient(170deg, #3a1c08 0%, #2a1206 100%);
-      border: 1px solid #5a2e0e; border-radius: 10px; overflow: hidden;
-    }
+    .panel { background: #111; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
     .panel-header {
-      background: rgba(0,0,0,0.3); padding: 10px 16px; font-size: 0.8rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.08em; color: #c8a070;
-      border-bottom: 1px solid #5a2e0e;
+      background: #1e1e1e; padding: 10px 16px; font-size: 0.8rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em; color: #888;
+      border-bottom: 1px solid #2a2a2a;
       display: flex; justify-content: space-between; align-items: center;
     }
     #log { font-family: monospace; font-size: 0.75rem; line-height: 1.6;
            max-height: 280px; overflow-y: auto; padding: 8px 12px; }
     .log-entry { display: flex; gap: 10px; padding: 2px 4px; border-radius: 4px; }
     .log-entry:hover { background: rgba(255,255,255,0.03); }
-    .log-ts  { color: #8a5c30; flex-shrink: 0; }
+    .log-ts  { color: #555; flex-shrink: 0; }
     .log-tag { flex-shrink: 0; font-weight: 700; min-width: 70px; text-align: right; }
-    .log-msg { color: #d8b888; word-break: break-all; }
+    .log-msg { color: #ccc; word-break: break-all; }
     .tag-info  { color: #3b82f6; }
     .tag-data  { color: #3b82f6; }
     .tag-warn  { color: #f97316; }
     .tag-error { color: #ef4444; }
     .tag-sys   { color: #a78bfa; }
     .tag-alarm { color: #facc15; font-weight: 800; }
-    .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,0.35); color: #c8a070; border: 1px solid #5a2e0e; }
+    .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: #2a2a2a; color: #888; }
   </style>
 </head>
 <body>
@@ -288,9 +270,9 @@
   </div>
   <div id="logBody" style="display:none">
     <div style="padding:8px 12px 4px;border-bottom:1px solid #1e1e1e;">
-      <span style="font-size:0.75rem;color:#a07850;">Smoker IP: <strong id="infoIp" style="color:#fde68a;">—</strong></span>
-      <span style="font-size:0.75rem;color:#a07850;margin-left:16px;">BT Address: <strong id="infoBtMac" style="color:#fde68a;">—</strong></span>
-      <span style="font-size:0.75rem;color:#a07850;margin-left:16px;">Poll Interval: <strong id="infoInterval" style="color:#fde68a;">—</strong></span>
+      <span style="font-size:0.75rem;color:#555;">Smoker IP: <strong id="infoIp" style="color:#93c5fd;">—</strong></span>
+      <span style="font-size:0.75rem;color:#555;margin-left:16px;">BT Address: <strong id="infoBtMac" style="color:#93c5fd;">—</strong></span>
+      <span style="font-size:0.75rem;color:#555;margin-left:16px;">Poll Interval: <strong id="infoInterval" style="color:#93c5fd;">—</strong></span>
     </div>
     <div id="log"></div>
   </div>
@@ -374,11 +356,11 @@ const chart = new Chart(document.getElementById('tempChart'), {
     responsive: true, animation: false,
     interaction: { mode: 'index', intersect: false },
     scales: {
-      x: { ticks: { color: '#78350f', maxTicksLimit: 10 }, grid: { color: 'rgba(61,31,10,0.6)' } },
-      y: { ticks: { color: '#78350f', callback: v => `${v}°F` }, grid: { color: 'rgba(61,31,10,0.6)' }, beginAtZero: false },
+      x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: '#1e1e1e' } },
+      y: { ticks: { color: '#666', callback: v => `${v}°F` }, grid: { color: '#1e1e1e' }, beginAtZero: false },
     },
     plugins: {
-      legend: { labels: { color: '#a16207', boxWidth: 20, padding: 16,
+      legend: { labels: { color: '#888', boxWidth: 20, padding: 16,
         filter: (item, data) => data.datasets[item.datasetIndex].data.some(v => v !== null)
       } },
       tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}°F` } },
