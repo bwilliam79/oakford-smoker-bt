@@ -80,6 +80,25 @@ async def find_smoker():
         return match.address
     return None
 
+async def read_rssi(address: str, timeout: float = 5.0) -> int | None:
+    """Scan for a specific device and return its RSSI from advertisement data."""
+    result  = None
+    found   = asyncio.Event()
+
+    def callback(device, adv_data):
+        nonlocal result
+        if device.address.upper() == address.upper() and adv_data.rssi is not None:
+            result = adv_data.rssi
+            found.set()
+
+    async with BleakScanner(callback, scanning_mode='active'):
+        try:
+            await asyncio.wait_for(found.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+
+    return result
+
 async def poll_loop(interval: int):
     smoker_was_offline = False
     await sleep_to_next_tick(interval)
@@ -101,13 +120,10 @@ async def poll_loop(interval: int):
                 continue
 
         try:
-            # Quick scan for RSSI before connecting
-            try:
-                scanned = await BleakScanner.find_device_by_address(state['address'], timeout=3.0, scanning_mode='active')
-                if scanned:
-                    state['rssi'] = scanned.rssi
-            except Exception:
-                pass
+            # Read RSSI from advertisement data before connecting
+            rssi = await read_rssi(state['address'], timeout=5.0)
+            if rssi is not None:
+                state['rssi'] = rssi
 
             async with BleakClient(state['address'], timeout=15) as client:
                 # Read IP once
