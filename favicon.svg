@@ -1,22 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Smoke puffs -->
-  <circle cx="22" cy="3"   r="2"   fill="#9ca3af" opacity="0.75"/>
-  <circle cx="24.5" cy="1.5" r="1.4" fill="#9ca3af" opacity="0.55"/>
+  <!-- Smoke puffs (warmer tone) -->
+  <circle cx="22"   cy="3"   r="2"   fill="#d97706" opacity="0.55"/>
+  <circle cx="24.5" cy="1.5" r="1.4" fill="#d97706" opacity="0.35"/>
   <!-- Chimney -->
-  <rect x="20" y="4" width="4" height="7" rx="1" fill="#c2410c"/>
+  <rect x="20" y="4" width="4" height="7" rx="1" fill="#92400e"/>
   <!-- Lid dome -->
-  <path d="M4 16 Q4 9 16 9 Q28 9 28 16 Z" fill="#ea580c"/>
+  <path d="M4 16 Q4 9 16 9 Q28 9 28 16 Z" fill="#b45309"/>
+  <!-- Lid highlight -->
+  <path d="M8 13 Q10 10.5 16 10.5 Q22 10.5 24 13" stroke="#fbbf24" stroke-width="0.7" fill="none" opacity="0.4"/>
   <!-- Handle -->
   <rect x="13" y="7" width="6" height="3" rx="1.5" fill="#fbbf24"/>
   <!-- Smoker body -->
-  <rect x="4" y="16" width="24" height="10" rx="2" fill="#f97316"/>
+  <rect x="4" y="16" width="24" height="10" rx="2" fill="#c2600a"/>
+  <!-- Body wood-grain lines -->
+  <line x1="4" y1="18.5" x2="28" y2="18.5" stroke="#92400e" stroke-width="0.4" opacity="0.5"/>
+  <line x1="4" y1="21"   x2="28" y2="21"   stroke="#92400e" stroke-width="0.4" opacity="0.5"/>
+  <line x1="4" y1="23.5" x2="28" y2="23.5" stroke="#92400e" stroke-width="0.4" opacity="0.5"/>
   <!-- Firebox door -->
-  <rect x="6" y="18" width="5" height="5" rx="1" fill="#7c2d12"/>
-  <!-- Vent slits on door -->
-  <line x1="7.5" y1="19.5" x2="9.5" y2="19.5" stroke="#f97316" stroke-width="0.8"/>
-  <line x1="7.5" y1="21"   x2="9.5" y2="21"   stroke="#f97316" stroke-width="0.8"/>
-  <line x1="7.5" y1="22.5" x2="9.5" y2="22.5" stroke="#f97316" stroke-width="0.8"/>
+  <rect x="6" y="18" width="5" height="5" rx="1" fill="#1c0a00"/>
+  <!-- Flames in firebox -->
+  <path d="M7 23 Q7.3 21.2 8.0 22.1 Q8.2 19.8 9.0 21.3 Q9.5 20.3 10.0 21.8 Q10.2 23 9 23 Z" fill="#fbbf24"/>
+  <path d="M7.5 23 Q7.8 21.8 8.3 22.5 Q8.6 20.8 9.2 21.9 Q9.2 22.8 8.5 23 Z" fill="#f97316"/>
+  <!-- Firebox glow -->
+  <rect x="6" y="18" width="5" height="5" rx="1" fill="url(#glow)" opacity="0.4"/>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="80%" r="60%">
+      <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
   <!-- Legs -->
-  <rect x="7"  y="26" width="3" height="5" rx="1" fill="#9a3412"/>
-  <rect x="22" y="26" width="3" height="5" rx="1" fill="#9a3412"/>
+  <rect x="7"  y="26" width="3" height="5" rx="1" fill="#78350f"/>
+  <rect x="22" y="26" width="3" height="5" rx="1" fill="#78350f"/>
 </svg>

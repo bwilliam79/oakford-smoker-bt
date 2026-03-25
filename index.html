@@ -11,30 +11,52 @@
     body {
       font-family: 'Segoe UI', system-ui, sans-serif;
       background:
-        radial-gradient(ellipse at 50% 110%, rgba(249,115,22,0.18) 0%, transparent 55%),
-        radial-gradient(ellipse at 15% 95%,  rgba(239,68,68,0.08)  0%, transparent 40%),
-        radial-gradient(ellipse at 85% 95%,  rgba(234,88,12,0.08)  0%, transparent 40%),
-        #111;
+        radial-gradient(ellipse at 50% 108%, rgba(251,146,60,0.45) 0%, rgba(194,48,10,0.25) 22%, transparent 52%),
+        radial-gradient(ellipse at 20% 108%, rgba(239,68,68,0.20)  0%, transparent 38%),
+        radial-gradient(ellipse at 80% 108%, rgba(249,115,22,0.20) 0%, transparent 38%),
+        radial-gradient(ellipse at 50% 0%,   rgba(0,0,0,0.6)       0%, transparent 60%),
+        linear-gradient(180deg, #0c0704 0%, #0a0603 100%);
       color: #e0e0e0;
       min-height: 100vh; padding: 24px;
       overflow-x: hidden;
     }
 
-    /* ── Smoke particles ── */
+    /* ── Fire floor glow ── */
+    body::after {
+      content: '';
+      position: fixed; bottom: 0; left: 0; right: 0; height: 120px;
+      background: linear-gradient(to top, rgba(194,96,10,0.12) 0%, transparent 100%);
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── Ember + smoke particles ── */
     .smoke-wrap {
       position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0;
     }
+    /* Rising smoke wisps */
     .smoke {
       position: absolute; bottom: -20px;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(200,200,200,0.10) 0%, transparent 70%);
+      background: radial-gradient(circle, rgba(180,130,90,0.09) 0%, transparent 70%);
       animation: rise linear infinite;
     }
     @keyframes rise {
       0%   { transform: translateY(0)    translateX(0)   scale(1);   opacity: 0; }
       15%  { opacity: 1; }
-      85%  { opacity: 0.4; }
+      85%  { opacity: 0.35; }
       100% { transform: translateY(-90vh) translateX(30px) scale(4); opacity: 0; }
+    }
+    /* Glowing embers */
+    .ember {
+      position: absolute; bottom: -6px;
+      border-radius: 50%;
+      animation: ember-rise linear infinite;
+    }
+    @keyframes ember-rise {
+      0%   { transform: translateY(0) translateX(0) scale(1);    opacity: 0; }
+      8%   { opacity: 1; }
+      60%  { opacity: 0.8; }
+      100% { transform: translateY(-55vh) translateX(var(--drift,15px)) scale(0.15); opacity: 0; }
     }
 
     /* ── Page header ── */
@@ -54,11 +76,12 @@
     .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 20px; }
 
     .status-bar {
-      background: #111; border: 1px solid #333; border-radius: 8px;
-      padding: 8px 16px; font-size: 0.85rem; margin-bottom: 20px;
+      background: rgba(0,0,0,0.35); border: 1px solid #3d1f0a; border-radius: 8px;
+      padding: 6px 14px; font-size: 0.82rem;
       display: inline-flex; align-items: center; gap: 10px;
+      backdrop-filter: blur(4px);
     }
-    .status-wrap { display: flex; justify-content: center; }
+    .status-wrap { display: none; }
     .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; flex-shrink: 0; }
     .dot.connected    { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
     .dot.connecting   { background: #f97316; animation: pulse 0.8s infinite; }
@@ -67,11 +90,11 @@
 
     .info-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
     .info-pill {
-      background: #0f1f2e; border: 1px solid #1e3a5f;
+      background: rgba(20,10,4,0.7); border: 1px solid #3d1f0a;
       border-radius: 8px; padding: 8px 14px;
-      font-size: 0.78rem; color: #93c5fd;
+      font-size: 0.78rem; color: #d97706;
     }
-    .info-pill strong { color: #e0e0e0; }
+    .info-pill strong { color: #fde68a; }
 
     .dash {
       display: flex;
@@ -81,7 +104,15 @@
     }
     .temp-card { width: 160px; }
     .temp-card {
-      background: #111; border: 1px solid #2a2a2a; border-radius: 12px;
+      background:
+        repeating-linear-gradient(92deg,
+          transparent 0, transparent 11px,
+          rgba(0,0,0,0.07) 11px, rgba(0,0,0,0.07) 12px,
+          transparent 12px, transparent 24px,
+          rgba(255,180,80,0.025) 24px, rgba(255,180,80,0.025) 25px
+        ),
+        linear-gradient(170deg, #1e0d05 0%, #140904 60%, #1a0c05 100%);
+      border: 1px solid #3d1f0a; border-radius: 12px;
       padding: 16px; text-align: center;
     }
     .temp-card.grill        { border-color: #3b82f6; }
@@ -119,22 +150,40 @@
     .probe2.active .temp-val { color: #facc15; }
 
     .chart-panel {
-      background: #111; border: 1px solid #2a2a2a; border-radius: 10px;
+      background:
+        repeating-linear-gradient(92deg,
+          transparent 0, transparent 11px,
+          rgba(0,0,0,0.07) 11px, rgba(0,0,0,0.07) 12px,
+          transparent 12px, transparent 24px,
+          rgba(255,180,80,0.025) 24px, rgba(255,180,80,0.025) 25px
+        ),
+        linear-gradient(170deg, #1a0c04 0%, #120804 100%);
+      border: 1px solid #3d1f0a; border-radius: 10px;
       padding: 16px; margin-bottom: 16px;
     }
     .chart-panel canvas { max-height: 300px; }
 
-    .panel { background: #111; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
+    .panel {
+      background:
+        repeating-linear-gradient(92deg,
+          transparent 0, transparent 11px,
+          rgba(0,0,0,0.07) 11px, rgba(0,0,0,0.07) 12px,
+          transparent 12px, transparent 24px,
+          rgba(255,180,80,0.025) 24px, rgba(255,180,80,0.025) 25px
+        ),
+        linear-gradient(170deg, #1a0c04 0%, #120804 100%);
+      border: 1px solid #3d1f0a; border-radius: 10px; overflow: hidden;
+    }
     .panel-header {
-      background: #1e1e1e; padding: 10px 16px; font-size: 0.8rem; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.08em; color: #888;
-      border-bottom: 1px solid #2a2a2a;
+      background: rgba(0,0,0,0.35); padding: 10px 16px; font-size: 0.8rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em; color: #a16207;
+      border-bottom: 1px solid #3d1f0a;
       display: flex; justify-content: space-between; align-items: center;
     }
     #log { font-family: monospace; font-size: 0.75rem; line-height: 1.6;
            max-height: 280px; overflow-y: auto; padding: 8px 12px; }
     .log-entry { display: flex; gap: 10px; padding: 2px 4px; border-radius: 4px; }
-    .log-entry:hover { background: #1a1a1a; }
+    .log-entry:hover { background: rgba(255,255,255,0.03); }
     .log-ts  { color: #555; flex-shrink: 0; }
     .log-tag { flex-shrink: 0; font-weight: 700; min-width: 70px; text-align: right; }
     .log-msg { color: #ccc; word-break: break-all; }
@@ -144,19 +193,29 @@
     .tag-error { color: #ef4444; }
     .tag-sys   { color: #a78bfa; }
     .tag-alarm { color: #facc15; font-weight: 800; }
-    .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: #2a2a2a; color: #888; }
+    .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,0.4); color: #92400e; border: 1px solid #3d1f0a; }
   </style>
 </head>
 <body>
 
-<!-- Smoke background particles -->
+<!-- Background particles: embers + smoke wisps -->
 <div class="smoke-wrap">
-  <div class="smoke" style="left:10%; width:60px;  height:60px;  animation-duration:14s; animation-delay:0s;"></div>
-  <div class="smoke" style="left:25%; width:40px;  height:40px;  animation-duration:10s; animation-delay:3s;"></div>
-  <div class="smoke" style="left:42%; width:80px;  height:80px;  animation-duration:18s; animation-delay:1s;"></div>
-  <div class="smoke" style="left:60%; width:50px;  height:50px;  animation-duration:12s; animation-delay:5s;"></div>
-  <div class="smoke" style="left:75%; width:70px;  height:70px;  animation-duration:16s; animation-delay:2s;"></div>
-  <div class="smoke" style="left:88%; width:45px;  height:45px;  animation-duration:11s; animation-delay:7s;"></div>
+  <!-- Embers -->
+  <div class="ember" style="left:6%;  width:3px; height:3px; background:radial-gradient(circle,#fde68a,#f97316,transparent); box-shadow:0 0 5px #f97316,0 0 10px rgba(249,115,22,0.4); --drift:18px;  animation-duration:3.5s; animation-delay:0.2s;"></div>
+  <div class="ember" style="left:14%; width:4px; height:4px; background:radial-gradient(circle,#fbbf24,#ef4444,transparent); box-shadow:0 0 6px #ef4444,0 0 12px rgba(239,68,68,0.4);  --drift:-12px; animation-duration:4.2s; animation-delay:1.4s;"></div>
+  <div class="ember" style="left:22%; width:3px; height:3px; background:radial-gradient(circle,#fde68a,#f97316,transparent); box-shadow:0 0 5px #f97316,0 0 10px rgba(249,115,22,0.4); --drift:22px;  animation-duration:3.1s; animation-delay:2.8s;"></div>
+  <div class="ember" style="left:35%; width:5px; height:5px; background:radial-gradient(circle,#fef08a,#fbbf24,transparent); box-shadow:0 0 8px #fbbf24,0 0 16px rgba(251,191,36,0.5); --drift:-8px;  animation-duration:5.0s; animation-delay:0.6s;"></div>
+  <div class="ember" style="left:48%; width:3px; height:3px; background:radial-gradient(circle,#fde68a,#f97316,transparent); box-shadow:0 0 5px #f97316,0 0 10px rgba(249,115,22,0.4); --drift:14px;  animation-duration:3.8s; animation-delay:3.5s;"></div>
+  <div class="ember" style="left:58%; width:4px; height:4px; background:radial-gradient(circle,#fbbf24,#ef4444,transparent); box-shadow:0 0 6px #ef4444,0 0 12px rgba(239,68,68,0.4);  --drift:-18px; animation-duration:4.5s; animation-delay:1.0s;"></div>
+  <div class="ember" style="left:68%; width:3px; height:3px; background:radial-gradient(circle,#fde68a,#f97316,transparent); box-shadow:0 0 5px #f97316,0 0 10px rgba(249,115,22,0.4); --drift:20px;  animation-duration:3.3s; animation-delay:4.2s;"></div>
+  <div class="ember" style="left:79%; width:5px; height:5px; background:radial-gradient(circle,#fef08a,#fbbf24,transparent); box-shadow:0 0 8px #fbbf24,0 0 16px rgba(251,191,36,0.5); --drift:-10px; animation-duration:4.8s; animation-delay:2.1s;"></div>
+  <div class="ember" style="left:88%; width:3px; height:3px; background:radial-gradient(circle,#fde68a,#f97316,transparent); box-shadow:0 0 5px #f97316,0 0 10px rgba(249,115,22,0.4); --drift:16px;  animation-duration:3.6s; animation-delay:0.9s;"></div>
+  <div class="ember" style="left:94%; width:4px; height:4px; background:radial-gradient(circle,#fbbf24,#ef4444,transparent); box-shadow:0 0 6px #ef4444,0 0 12px rgba(239,68,68,0.4);  --drift:-14px; animation-duration:4.0s; animation-delay:5.5s;"></div>
+  <!-- Smoke wisps -->
+  <div class="smoke" style="left:10%; width:70px;  height:70px;  animation-duration:16s; animation-delay:0s;"></div>
+  <div class="smoke" style="left:30%; width:50px;  height:50px;  animation-duration:12s; animation-delay:4s;"></div>
+  <div class="smoke" style="left:55%; width:90px;  height:90px;  animation-duration:20s; animation-delay:2s;"></div>
+  <div class="smoke" style="left:75%; width:60px;  height:60px;  animation-duration:14s; animation-delay:7s;"></div>
 </div>
 
 <!-- Page header -->
@@ -177,14 +236,10 @@
   </svg>
   <div>
     <h1>Oakford Smoker Monitor</h1>
-    <p>Real-time Bluetooth telemetry</p>
-  </div>
-</div>
-
-<div class="status-wrap">
-  <div class="status-bar">
-    <div class="dot connecting" id="statusDot"></div>
-    <span id="statusText">Connecting to server…</span>
+    <div class="status-bar" style="margin-top:6px;">
+      <div class="dot connecting" id="statusDot"></div>
+      <span id="statusText">Connecting to server…</span>
+    </div>
   </div>
 </div>
 
@@ -319,11 +374,11 @@ const chart = new Chart(document.getElementById('tempChart'), {
     responsive: true, animation: false,
     interaction: { mode: 'index', intersect: false },
     scales: {
-      x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: '#1e1e1e' } },
-      y: { ticks: { color: '#666', callback: v => `${v}°F` }, grid: { color: '#1e1e1e' }, beginAtZero: false },
+      x: { ticks: { color: '#78350f', maxTicksLimit: 10 }, grid: { color: 'rgba(61,31,10,0.6)' } },
+      y: { ticks: { color: '#78350f', callback: v => `${v}°F` }, grid: { color: 'rgba(61,31,10,0.6)' }, beginAtZero: false },
     },
     plugins: {
-      legend: { labels: { color: '#888', boxWidth: 20, padding: 16,
+      legend: { labels: { color: '#a16207', boxWidth: 20, padding: 16,
         filter: (item, data) => data.datasets[item.datasetIndex].data.some(v => v !== null)
       } },
       tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}°F` } },
