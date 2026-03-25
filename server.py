@@ -152,6 +152,11 @@ async def poll_loop(interval: int):
 async def index():
     return HTMLResponse(Path('index.html').read_text(encoding='utf-8'))
 
+@app.get('/favicon.svg')
+async def favicon():
+    from fastapi.responses import Response
+    return Response(Path('favicon.svg').read_bytes(), media_type='image/svg+xml')
+
 @app.get('/api/state')
 async def api_state():
     return state['last'] or {}
