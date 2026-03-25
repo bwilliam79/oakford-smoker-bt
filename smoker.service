@@ -1,13 +1,13 @@
 [Unit]
-Description=Oakford Smoker Monitor
+Description=BT Smoker Monitor
 After=bluetooth.target network-online.target
 Wants=bluetooth.target network-online.target
 
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/oakford-smoker-bt
-ExecStart=/home/pi/oakford-smoker-bt/venv/bin/python3 server.py --interval 30 --port 8080
+WorkingDirectory=/home/pi/bt-smoker-monitor
+ExecStart=/home/pi/bt-smoker-monitor/venv/bin/python3 server.py --interval 30 --port 8080
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal

@@ -1,4 +1,4 @@
-# Oakford Smoker Monitor
+# BT Smoker Monitor
 
 A local web dashboard for monitoring a Nexgrill Bluetooth smoker in real time. A Python backend polls the smoker via BLE every N seconds and pushes live temperature data to any browser via WebSocket — no cloud, no app required.
 
@@ -31,8 +31,8 @@ A local web dashboard for monitoring a Nexgrill Bluetooth smoker in real time. A
 ## Installation
 
 ```bash
-git clone https://github.com/bwilliam79/oakford-smoker-bt.git
-cd oakford-smoker-bt
+git clone https://github.com/bwilliam79/bt-smoker-monitor.git
+cd bt-smoker-monitor
 
 # Create and activate a virtual environment (recommended)
 python3 -m venv venv
@@ -75,27 +75,27 @@ python3 server.py --interval 10 --port 8080 --debug
 
 The included `smoker.service` systemd unit runs the monitor automatically at boot.
 
-**1. Copy the project to your Linux box:**
+**1. Clone the repo on your Linux box:**
 
 ```bash
-scp -r oakford-smoker-bt/ pi@<your-linux-box-ip>:~/
+git clone https://github.com/bwilliam79/bt-smoker-monitor.git
+cd bt-smoker-monitor
 ```
 
-**2. Set up the virtualenv on the Linux box:**
+**2. Set up the virtualenv:**
 
 ```bash
-cd ~/oakford-smoker-bt
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**3. Edit `smoker.service`** if your username or install path differs from `/home/pi/oakford-smoker-bt`:
+**3. Edit `smoker.service`** if your username or install path differs from `/home/pi/bt-smoker-monitor`:
 
 ```ini
 User=your-username
-WorkingDirectory=/home/your-username/oakford-smoker-bt
-ExecStart=/home/your-username/oakford-smoker-bt/venv/bin/python3 server.py --interval 30 --port 8080
+WorkingDirectory=/home/your-username/bt-smoker-monitor
+ExecStart=/home/your-username/bt-smoker-monitor/venv/bin/python3 server.py --interval 30 --port 8080
 ```
 
 **4. Install and enable the service:**
@@ -137,7 +137,7 @@ journalctl -u smoker -f         # follow logs
 | **Smoker card** (blue) | Current grill temp, set point, at-temp timer, over/under temp indicator |
 | **Probe 1 card** (red) | Current probe temp, target, ETA — hidden when probe not connected |
 | **Probe 2 card** (yellow) | Current probe temp, target, ETA — hidden when probe not connected |
-| **Chart** | Scrolling 60-point history with dashed target lines |
+| **Chart** | 24-hour scrolling history with dashed target lines |
 
 ### Temperature indicators
 

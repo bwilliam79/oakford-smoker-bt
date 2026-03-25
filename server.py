@@ -1,5 +1,5 @@
 """
-Oakford Smoker Monitor — BLE poller + WebSocket server
+BT Smoker Monitor — BLE poller + WebSocket server
 Usage: python3 server.py [--interval 30] [--port 8080]
 """
 import asyncio
@@ -197,7 +197,7 @@ async def main(interval: int, port: int, address: str | None):
     )
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Oakford Smoker Monitor')
+    parser = argparse.ArgumentParser(description='BT Smoker Monitor')
     parser.add_argument('--interval', type=int,  default=30,   help='Poll interval in seconds (default: 30)')
     parser.add_argument('--port',     type=int,  default=8080, help='Web server port (default: 8080)')
     parser.add_argument('--address',  type=str,  default=None, help='Hardcode BLE address, skipping discovery (e.g. AA:BB:CC:DD:EE:FF)')
