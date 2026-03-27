@@ -320,8 +320,8 @@ const chart = new Chart(document.getElementById('tempChart'), {
   data: {
     labels: chartLabels,
     datasets: [
-      makeDataset('Grill',          DS.grill,       '#3b82f6', false),
-      makeDataset('Grill Target',   DS.grillTarget, '#3b82f6', true),
+      makeDataset('Smoker',         DS.grill,       '#3b82f6', false),
+      makeDataset('Smoker Target',  DS.grillTarget, '#3b82f6', true),
       makeDataset('Probe 1',        DS.p1,          '#ef4444', false),
       makeDataset('Probe 1 Target', DS.p1Target,    '#ef4444', true),
       makeDataset('Probe 2',        DS.p2,          '#facc15', false),
@@ -626,6 +626,7 @@ function connect() {
       if (d.data.length) updateDash(d.data[d.data.length - 1]);
       (d.logs || []).forEach(e => log(e.tag, e.msg, e.cls, new Date(e.ts * 1000)));
       log('SYS', `Session restored: ${d.data.length} data point(s), ${(d.logs||[]).length} log event(s).`, 'tag-sys');
+      if (d.smoker_online) setStatus('connected', 'Connected');
       return;
     }
     if (d.smoker_offline) {
