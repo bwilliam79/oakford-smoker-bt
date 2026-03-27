@@ -50,9 +50,6 @@ docker run -d \
 
 Then open **http://\<host-ip\>:8080** in any browser.
 
-> **Note:** The image on GHCR must be set to **public** before an unauthenticated pull will work.
-> Go to: GitHub → Packages → bt-smoker-monitor → Package settings → Change visibility → Public.
-
 ### Bluetooth flags explained
 
 | Flag | Why it's needed |
