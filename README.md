@@ -64,8 +64,8 @@ Then open **http://\<host-ip\>:8080** in any browser.
 |------|---------|-------------|
 | `--port` | `8080` | Web server port |
 | `--interval` | `30` | BLE poll interval in seconds |
-| `--address` | *(auto)* | BLE address of the smoker — only needed if auto-discovery fails (e.g. `AA:BB:CC:DD:EE:FF`) |
-| `--adapter` | *(auto)* | Bluetooth adapter to use when multiple are present (e.g. `hci1`) |
+| `--address` | *(auto)* | BLE address — only needed if auto-discovery fails |
+| `--adapter` | *(auto)* | Bluetooth adapter when multiple are present (e.g. `hci1`) |
 | `--debug` | off | Enable verbose poll logging |
 
 ---
