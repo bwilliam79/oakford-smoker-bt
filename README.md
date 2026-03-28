@@ -44,6 +44,7 @@ docker run -d \
   -v /var/run/dbus:/var/run/dbus \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
+  --security-opt apparmor=unconfined \
   ghcr.io/bwilliam79/bt-smoker-monitor:latest \
   --interval 30 --port 8080
 ```
@@ -57,6 +58,7 @@ Then open **http://\<host-ip\>:8080** in any browser.
 | `--net=host` | Lets bleak scan for BLE advertisements on the host's radio |
 | `-v /var/run/dbus:/var/run/dbus` | Gives the container access to the host's `bluetoothd` via D-Bus |
 | `--cap-add=NET_ADMIN` / `NET_RAW` | Allows the raw socket operations BlueZ requires |
+| `--security-opt apparmor=unconfined` | Required on Ubuntu/Debian — AppArmor otherwise blocks D-Bus access |
 
 ### Options
 
