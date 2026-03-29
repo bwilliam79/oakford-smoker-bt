@@ -195,6 +195,13 @@ async def favicon():
 async def api_state():
     return state['last'] or {}
 
+@app.post('/api/clear-history')
+async def clear_history():
+    state['history'].clear()
+    state['log_history'].clear()
+    await broadcast({'type': 'clear_history'})
+    return {'ok': True}
+
 @app.websocket('/ws')
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()

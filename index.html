@@ -232,6 +232,10 @@
 </div>
 
 <div class="chart-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px 6px;">
+    <span style="font-size:0.8rem;color:#555;font-weight:600;letter-spacing:0.04em;">TEMPERATURE HISTORY</span>
+    <button onclick="clearChart()" style="background:#222;color:#888;border:1px solid #333;border-radius:6px;padding:2px 10px;font-size:0.72rem;cursor:pointer;">Clear</button>
+  </div>
   <canvas id="tempChart"></canvas>
 </div>
 
@@ -292,6 +296,13 @@ function clearLog() {
   document.getElementById('log').innerHTML = '';
   logEntries = 0;
   document.getElementById('logCount').textContent = 0;
+}
+function clearChart() {
+  chartTimestamps.length = 0;
+  chartLabels.length = 0;
+  Object.values(DS).forEach(arr => arr.length = 0);
+  chart.update();
+  fetch('/api/clear-history', { method: 'POST' });
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
@@ -624,9 +635,45 @@ function connect() {
 
   ws.onmessage = ({ data }) => {
     const d = JSON.parse(data);
+    if (d.type === 'clear_history') {
+      chartTimestamps.length = 0;
+      chartLabels.length = 0;
+      Object.values(DS).forEach(arr => arr.length = 0);
+      chart.update();
+      log('SYS', 'Chart history cleared.', 'tag-sys');
+      return;
+    }
     if (d.type === 'history') {
       d.data.forEach(pt => pushChartPoint(pt, new Date(pt.ts * 1000), true));
       chart.update();
+
+      // Restore probe ETA history from the last HISTORY_MAX points
+      d.data.slice(-HISTORY_MAX).forEach(pt => {
+        pt.probes.forEach((temp, i) => {
+          if (temp < PROBE_DISCONNECTED) probeHistory[i].push({ temp, time: pt.ts * 1000 });
+        });
+      });
+
+      // Restore at-temp timer: find the start of the current consecutive at-temp streak
+      if (d.smoker_online && d.data.length) {
+        const latest = d.data[d.data.length - 1];
+        const atTemp = Math.abs(latest.grill - latest.setPoint) <= 5 && latest.grill <= latest.setPoint + 5;
+        if (atTemp) {
+          let atTempStart = latest.ts * 1000;
+          for (let i = d.data.length - 2; i >= 0; i--) {
+            const pt = d.data[i];
+            if (Math.abs(pt.grill - pt.setPoint) <= 5 && pt.grill <= pt.setPoint + 5) {
+              atTempStart = pt.ts * 1000;
+            } else { break; }
+          }
+          grillAtTempSince = atTempStart;
+          const el = document.getElementById('grillAtTempTimer');
+          grillAtTempTick = setInterval(() => {
+            el.textContent = `At temp for ${formatDuration(Date.now() - grillAtTempSince)}`;
+          }, 1000);
+        }
+      }
+
       if (d.data.length) updateDash(d.data[d.data.length - 1]);
       (d.logs || []).forEach(e => log(e.tag, e.msg, e.cls, new Date(e.ts * 1000)));
       log('SYS', `Session restored: ${d.data.length} data point(s), ${(d.logs||[]).length} log event(s).`, 'tag-sys');
