@@ -270,7 +270,7 @@ async def scan_and_read() -> tuple[dict | None, object | None, int | None]:
         print(f'Found: {found_device.name}  ({found_device.address})  RSSI: {rssi} dBm')
 
         # Connect while scanner is still running — device remains in BlueZ cache
-        client_kwargs = {'timeout': 30, 'services': set()}
+        client_kwargs = {'timeout': 30}
         if state['adapter']:
             client_kwargs['bluez'] = {'adapter': state['adapter']}
 
