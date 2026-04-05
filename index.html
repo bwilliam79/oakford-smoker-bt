@@ -217,6 +217,15 @@
     }
     .modal-cancel:hover { border-color: #555; color: #aaa; }
     .modal-saved { font-size: 0.75rem; color: #22c55e; align-self: center; display: none; }
+    .modal-select {
+      background: #0d0d0d; border: 1px solid #3d1f0a; border-radius: 7px;
+      color: #fde68a; padding: 8px 12px; font-size: 0.85rem; outline: none; width: 100%;
+      appearance: none; cursor: pointer;
+    }
+    .modal-select:focus { border-color: #f97316; }
+    .modal-restart-warn {
+      font-size: 0.7rem; color: #f97316; margin-top: 4px; display: none;
+    }
   </style>
 </head>
 <body>
@@ -228,6 +237,13 @@
 <div class="modal-overlay" id="settingsOverlay" onclick="overlayClick(event)">
   <div class="modal">
     <h2>⚙️ Settings</h2>
+    <div class="modal-row">
+      <label class="modal-label" for="adapterSelect">Bluetooth Adapter</label>
+      <select id="adapterSelect" class="modal-select" onchange="onAdapterChange()">
+        <option value="">System default</option>
+      </select>
+      <span class="modal-restart-warn" id="restartWarn">⚠️ Changing the adapter will restart the service.</span>
+    </div>
     <div class="modal-row">
       <label class="modal-label" for="ntfyInput">ntfy.sh Push Notification Topic</label>
       <input id="ntfyInput" class="modal-input" type="text"
@@ -379,14 +395,35 @@ function clearChart() {
 }
 
 // ── Settings modal ────────────────────────────────────────────────────────────
+let _originalAdapter = '';
+
 async function openSettings() {
   try {
-    const res  = await fetch('/api/config');
-    const data = await res.json();
-    document.getElementById('ntfyInput').value = data.ntfy_topic || '';
+    const [cfgRes, adpRes] = await Promise.all([fetch('/api/config'), fetch('/api/adapters')]);
+    const cfg = await cfgRes.json();
+    const adp = await adpRes.json();
+
+    // Populate adapter dropdown
+    const sel = document.getElementById('adapterSelect');
+    sel.innerHTML = '<option value="">System default</option>';
+    adp.adapters.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a; opt.textContent = a;
+      if (a === adp.current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    _originalAdapter = adp.current || '';
+
+    document.getElementById('ntfyInput').value = cfg.ntfy_topic || '';
   } catch (e) { /* non-fatal — open anyway */ }
-  document.getElementById('modalSaved').style.display = 'none';
+  document.getElementById('modalSaved').style.display  = 'none';
+  document.getElementById('restartWarn').style.display = 'none';
   document.getElementById('settingsOverlay').classList.add('open');
+}
+
+function onAdapterChange() {
+  const changed = document.getElementById('adapterSelect').value !== _originalAdapter;
+  document.getElementById('restartWarn').style.display = changed ? 'block' : 'none';
 }
 
 function closeSettings() {
@@ -399,17 +436,25 @@ function overlayClick(e) {
 
 async function saveSettings() {
   const topic   = document.getElementById('ntfyInput').value.trim();
+  const adapter = document.getElementById('adapterSelect').value;
   const savedEl = document.getElementById('modalSaved');
   try {
     const res = await fetch('/api/config', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ ntfy_topic: topic }),
+      body:    JSON.stringify({ ntfy_topic: topic, adapter }),
     });
     if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
     savedEl.style.display = 'inline';
-    log('SYS', `ntfy topic ${topic ? 'set to "' + topic + '"' : 'cleared'}.`, 'tag-sys');
-    setTimeout(closeSettings, 1200);
+    log('SYS', `Settings saved — adapter: ${adapter || 'default'}, ntfy: ${topic || '(none)'}.`, 'tag-sys');
+    if (data.restarting) {
+      log('SYS', 'Adapter changed — service restarting…', 'tag-sys');
+      setTimeout(() => { savedEl.textContent = 'Restarting…'; }, 800);
+      setTimeout(closeSettings, 2000);
+    } else {
+      setTimeout(closeSettings, 1200);
+    }
   } catch (e) {
     log('ERROR', `Failed to save settings: ${e}`, 'tag-error');
   }
