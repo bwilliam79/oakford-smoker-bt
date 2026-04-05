@@ -168,9 +168,82 @@
     .tag-sys   { color: #a78bfa; }
     .tag-alarm { color: #facc15; font-weight: 800; }
     .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; background: #2a2a2a; color: #888; }
+
+    /* ── Settings modal ── */
+    .cfg-btn {
+      position: fixed; top: 14px; right: 16px; z-index: 100;
+      background: rgba(20,10,4,0.8); border: 1px solid #3d1f0a;
+      border-radius: 8px; padding: 6px 8px; cursor: pointer;
+      color: #f97316; font-size: 1.1rem; line-height: 1;
+      backdrop-filter: blur(4px);
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .cfg-btn:hover { border-color: #f97316; color: #fde68a; }
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.65); backdrop-filter: blur(3px);
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #111; border: 1px solid #3d1f0a; border-radius: 14px;
+      padding: 24px 28px; width: min(420px, 92vw);
+      box-shadow: 0 0 40px rgba(249,115,22,0.15);
+    }
+    .modal h2 {
+      font-size: 1rem; font-weight: 700; color: #f97316;
+      margin-bottom: 18px; display: flex; align-items: center; gap: 8px;
+    }
+    .modal-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+    .modal-label { font-size: 0.75rem; color: #888; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+    .modal-input {
+      background: #0d0d0d; border: 1px solid #3d1f0a; border-radius: 7px;
+      color: #fde68a; padding: 8px 12px; font-size: 0.85rem; outline: none; width: 100%;
+    }
+    .modal-input:focus { border-color: #f97316; }
+    .modal-input::placeholder { color: #444; }
+    .modal-hint { font-size: 0.7rem; color: #555; margin-top: 4px; }
+    .modal-hint a { color: #f97316; text-decoration: none; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .modal-save {
+      background: #7c2d12; border: 1px solid #f97316; border-radius: 7px;
+      color: #fde68a; padding: 7px 20px; font-size: 0.82rem;
+      cursor: pointer; font-weight: 600;
+    }
+    .modal-save:hover { background: #991b1b; }
+    .modal-cancel {
+      background: transparent; border: 1px solid #333; border-radius: 7px;
+      color: #888; padding: 7px 16px; font-size: 0.82rem; cursor: pointer;
+    }
+    .modal-cancel:hover { border-color: #555; color: #aaa; }
+    .modal-saved { font-size: 0.75rem; color: #22c55e; align-self: center; display: none; }
   </style>
 </head>
 <body>
+
+<!-- Gear / settings button -->
+<button class="cfg-btn" onclick="openSettings()" title="Settings">⚙️</button>
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsOverlay" onclick="overlayClick(event)">
+  <div class="modal">
+    <h2>⚙️ Settings</h2>
+    <div class="modal-row">
+      <label class="modal-label" for="ntfyInput">ntfy.sh Push Notification Topic</label>
+      <input id="ntfyInput" class="modal-input" type="text"
+             placeholder="e.g. bwwilliams-smoker-monitor" autocomplete="off" />
+      <span class="modal-hint">
+        Receive alerts on your phone via <a href="https://ntfy.sh" target="_blank">ntfy.sh</a>.
+        Leave blank to disable.
+      </span>
+    </div>
+    <div class="modal-actions">
+      <span class="modal-saved" id="modalSaved">Saved!</span>
+      <button class="modal-cancel" onclick="closeSettings()">Cancel</button>
+      <button class="modal-save" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
 
 <!-- Background particles: embers + smoke wisps -->
 <div class="smoke-wrap">
@@ -303,6 +376,43 @@ function clearChart() {
   Object.values(DS).forEach(arr => arr.length = 0);
   chart.update();
   fetch('/api/clear-history', { method: 'POST' });
+}
+
+// ── Settings modal ────────────────────────────────────────────────────────────
+async function openSettings() {
+  try {
+    const res  = await fetch('/api/config');
+    const data = await res.json();
+    document.getElementById('ntfyInput').value = data.ntfy_topic || '';
+  } catch (e) { /* non-fatal — open anyway */ }
+  document.getElementById('modalSaved').style.display = 'none';
+  document.getElementById('settingsOverlay').classList.add('open');
+}
+
+function closeSettings() {
+  document.getElementById('settingsOverlay').classList.remove('open');
+}
+
+function overlayClick(e) {
+  if (e.target === document.getElementById('settingsOverlay')) closeSettings();
+}
+
+async function saveSettings() {
+  const topic   = document.getElementById('ntfyInput').value.trim();
+  const savedEl = document.getElementById('modalSaved');
+  try {
+    const res = await fetch('/api/config', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ ntfy_topic: topic }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    savedEl.style.display = 'inline';
+    log('SYS', `ntfy topic ${topic ? 'set to "' + topic + '"' : 'cleared'}.`, 'tag-sys');
+    setTimeout(closeSettings, 1200);
+  } catch (e) {
+    log('ERROR', `Failed to save settings: ${e}`, 'tag-error');
+  }
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────

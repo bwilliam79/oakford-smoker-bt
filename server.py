@@ -24,6 +24,7 @@ CHAR_TEMP = '0000cc01-0000-1000-8000-00805f9b34fb'
 PROBE_DISCONNECTED = 999
 TARGET_PREFIX      = 'NXE'
 HISTORY_MAX_AGE    = 24 * 60 * 60   # seconds
+CONFIG_PATH        = Path('/data/config.json')
 
 # ── ETA / stall constants ─────────────────────────────────────────────────────
 STALL_WINDOW_SECS = 20 * 60   # how far back to look for a stall (20 min)
@@ -155,6 +156,24 @@ async def broadcast(msg: dict):
         except Exception:
             dead.add(ws)
     clients.difference_update(dead)
+
+# ── Config file ───────────────────────────────────────────────────────────────
+def load_config() -> dict:
+    """Load config from CONFIG_PATH. Returns {} if missing or malformed."""
+    try:
+        if CONFIG_PATH.exists():
+            return json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+    except Exception as e:
+        log.warning(f'Could not read config file: {e}')
+    return {}
+
+def save_config(data: dict) -> None:
+    """Persist config dict to CONFIG_PATH, creating parent dirs as needed."""
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    except Exception as e:
+        log.warning(f'Could not write config file: {e}')
 
 # ── Server-side log history ───────────────────────────────────────────────────
 def add_log(tag: str, msg: str, cls: str, ts: float):
@@ -368,6 +387,18 @@ async def favicon():
 async def api_state():
     return state['last'] or {}
 
+@app.get('/api/config')
+async def get_config():
+    return {'ntfy_topic': state.get('ntfy_topic') or ''}
+
+@app.post('/api/config')
+async def post_config(body: dict):
+    topic = str(body.get('ntfy_topic', '')).strip()
+    state['ntfy_topic'] = topic or None
+    save_config({'ntfy_topic': topic})
+    print(f'ntfy topic {"updated to: " + topic if topic else "cleared"}.')
+    return {'ok': True, 'ntfy_topic': topic}
+
 @app.post('/api/clear-history')
 async def clear_history():
     state['history'].clear()
@@ -396,8 +427,14 @@ async def websocket_endpoint(ws: WebSocket):
 # ── Entry point ───────────────────────────────────────────────────────────────
 async def main(interval: int, port: int, address: str | None, adapter: str | None, ntfy_topic: str):
     state['interval']   = interval
-    state['ntfy_topic'] = ntfy_topic or None
-    if ntfy_topic:
+    state['ntfy_topic'] = ntfy_topic or None   # baseline from CLI/env
+
+    # Config file overrides CLI/env — allows runtime updates without restart
+    cfg = load_config()
+    if 'ntfy_topic' in cfg:
+        state['ntfy_topic'] = cfg['ntfy_topic'] or None
+        print(f'Loaded config — ntfy topic: {state["ntfy_topic"] or "(disabled)"}')
+    elif ntfy_topic:
         print(f'Push notifications enabled (ntfy topic: {ntfy_topic})')
     if address:
         print(f'Using hardcoded address: {address}')
