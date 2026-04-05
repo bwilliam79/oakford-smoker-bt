@@ -240,19 +240,23 @@ async def check_notifications(dec: dict):
 # ── BLE polling loop ──────────────────────────────────────────────────────────
 async def scan_and_read() -> tuple[dict | None, object | None, int | None]:
     """
-    Scan for the smoker, connect, and read temperature — all within a single
-    BleakScanner context so the device stays in BlueZ's D-Bus cache during
-    the connection attempt.
+    Scan for the smoker, stop the scanner, then connect and read.
+
+    Stopping the scanner before connecting frees the radio for GATT traffic.
+    The BLEDevice object retains its BlueZ D-Bus path so the device is still
+    reachable by BleakClient even after the scanner exits.
 
     Returns (decoded_packet, ble_device, rssi) or (None, None, None).
     """
     device_found = asyncio.Event()
     found_device = None
+    found_rssi   = None
 
-    def detection_callback(device, _adv_data):
-        nonlocal found_device
+    def detection_callback(device, adv_data):
+        nonlocal found_device, found_rssi
         if device.name and device.name.startswith(TARGET_PREFIX):
             found_device = device
+            found_rssi   = adv_data.rssi
             device_found.set()
 
     scanner_kwargs = {'scanning_mode': 'active'}
@@ -265,25 +269,24 @@ async def scan_and_read() -> tuple[dict | None, object | None, int | None]:
             await asyncio.wait_for(device_found.wait(), timeout=15)
         except asyncio.TimeoutError:
             return None, None, None
+        # Scanner context exits here — radio is now free for GATT
 
-        rssi = getattr(found_device, 'rssi', None)
-        print(f'Found: {found_device.name}  ({found_device.address})  RSSI: {rssi} dBm')
+    print(f'Found: {found_device.name}  ({found_device.address})  RSSI: {found_rssi} dBm')
 
-        # Connect while scanner is still running — device remains in BlueZ cache
-        client_kwargs = {'timeout': 30}
-        if state['adapter']:
-            client_kwargs['bluez'] = {'adapter': state['adapter']}
+    client_kwargs = {'timeout': 30}
+    if state['adapter']:
+        client_kwargs['bluez'] = {'adapter': state['adapter']}
 
-        async with BleakClient(found_device, **client_kwargs) as client:
-            if not state['ip']:
-                try:
-                    raw_ip = await client.read_gatt_char(CHAR_IP)
-                    state['ip'] = ''.join(chr(b) for b in raw_ip if 32 <= b < 127)
-                    print(f'Smoker IP: {state["ip"]}')
-                except Exception:
-                    pass
-            raw = await client.read_gatt_char(CHAR_TEMP)
-            return decode_packet(bytes(raw)), found_device, rssi
+    async with BleakClient(found_device, **client_kwargs) as client:
+        if not state['ip']:
+            try:
+                raw_ip = await client.read_gatt_char(CHAR_IP)
+                state['ip'] = ''.join(chr(b) for b in raw_ip if 32 <= b < 127)
+                print(f'Smoker IP: {state["ip"]}')
+            except Exception:
+                pass
+        raw = await client.read_gatt_char(CHAR_TEMP)
+        return decode_packet(bytes(raw)), found_device, found_rssi
 
 async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool, ble_device, rssi) -> bool:
     """Update state and broadcast a successful reading. Returns new smoker_was_offline value."""
