@@ -7,8 +7,10 @@ import json
 import logging
 import argparse
 import math
+import os
 import time
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from bleak import BleakScanner, BleakClient, BleakError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -22,6 +24,10 @@ CHAR_TEMP = '0000cc01-0000-1000-8000-00805f9b34fb'
 PROBE_DISCONNECTED = 999
 TARGET_PREFIX      = 'NXE'
 HISTORY_MAX_AGE    = 24 * 60 * 60   # seconds
+
+# ── ETA / stall constants ─────────────────────────────────────────────────────
+STALL_WINDOW_SECS = 20 * 60   # how far back to look for a stall (20 min)
+STALL_THRESHOLD_F = 2.0       # °F range within stall window that counts as stalled
 
 log = logging.getLogger('smoker')
 
@@ -39,10 +45,103 @@ def decode_packet(data: bytes):
         'probes':       [read_u16_le(data, 16), read_u16_le(data, 18)],
     }
 
+# ── ETA computation ───────────────────────────────────────────────────────────
+def _linreg_rate(points: list[dict]) -> float | None:
+    """Least-squares slope in °F/sec over a list of {temp, ts} dicts."""
+    n = len(points)
+    if n < 2:
+        return None
+    t0  = points[0]['ts']
+    xs  = [p['ts'] - t0 for p in points]
+    ys  = [p['temp']    for p in points]
+    xm  = sum(xs) / n
+    ym  = sum(ys) / n
+    num = sum((xs[i] - xm) * (ys[i] - ym) for i in range(n))
+    den = sum((xs[i] - xm) ** 2            for i in range(n))
+    return (num / den) if den else None
+
+def compute_probe_eta(history: list[dict], target: int, current_temp: int) -> tuple[int | None, bool]:
+    """
+    Return (eta_mins_or_None, stalled).
+
+    Uses linear regression over all probe history since detection.
+    Detects a stall when temp hasn't moved ≥ STALL_THRESHOLD_F in the last
+    STALL_WINDOW_SECS, and excludes the stall period from the regression so
+    the rate estimate reflects actual cooking progress.
+    """
+    if len(history) < 2 or target >= PROBE_DISCONNECTED or current_temp >= PROBE_DISCONNECTED:
+        return None, False
+
+    if current_temp >= target:
+        return 0, False
+
+    now    = history[-1]['ts']
+    cutoff = now - STALL_WINDOW_SECS
+    window = [p for p in history if p['ts'] >= cutoff]
+
+    # Stall: need ≥3 points in the window and barely any temp movement
+    stalled = (
+        len(window) >= 3 and
+        (max(p['temp'] for p in window) - min(p['temp'] for p in window)) < STALL_THRESHOLD_F
+    )
+
+    # Regression: exclude the flat stall window if stalling so it doesn't drag the slope down
+    reg_pts = [p for p in history if p['ts'] < cutoff] if stalled else history
+    if len(reg_pts) < 2:
+        return None, stalled
+
+    rate = _linreg_rate(reg_pts)   # °F / sec
+    if rate is None or rate <= 0:
+        return None, stalled
+
+    secs = (target - current_temp) / rate
+    return max(1, round(secs / 60)), stalled
+
+# ── ntfy.sh push notifications ────────────────────────────────────────────────
+def _ntfy_post(topic: str, title: str, message: str, priority: str, tags: str):
+    try:
+        req = Request(f'https://ntfy.sh/{topic}', data=message.encode(), method='POST')
+        req.add_header('Title', title)
+        req.add_header('Priority', priority)
+        if tags:
+            req.add_header('Tags', tags)
+        with urlopen(req, timeout=5):
+            pass
+    except Exception as e:
+        log.warning(f'ntfy notification failed: {e}')
+
+async def notify(title: str, message: str, priority: str = 'default', tags: str = ''):
+    topic = state.get('ntfy_topic')
+    if not topic:
+        return
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _ntfy_post, topic, title, message, priority, tags)
+
 # ── App state ─────────────────────────────────────────────────────────────────
 app      = FastAPI()
 clients: set[WebSocket] = set()
-state    = {'last': None, 'ip': None, 'address': None, 'rssi': None, 'adapter': None, 'history': [], 'log_history': [], 'interval': 30}
+state    = {
+    'last':          None,
+    'ip':            None,
+    'address':       None,
+    'rssi':          None,
+    'adapter':       None,
+    'history':       [],
+    'log_history':   [],
+    'interval':      30,
+    'ntfy_topic':    None,
+    # per-probe ETA state (reset when probe disconnects)
+    'probe_history': [[], []],    # [{temp, ts}, …] since probe first detected
+    'probe_eta':     [None, None],  # minutes to target, or None
+    'probe_stalled': [False, False],
+    # notification dedup
+    'notified': {
+        'probe_at_temp':   [False, False],
+        'probe_over_temp': [False, False],
+        'grill_at_temp':   False,
+        'grill_over_temp': False,
+    },
+}
 
 # ── WebSocket broadcast ───────────────────────────────────────────────────────
 async def broadcast(msg: dict):
@@ -69,6 +168,51 @@ async def sleep_to_next_tick(interval: int) -> None:
     now   = time.time()
     delta = math.ceil(now / interval) * interval - now
     await asyncio.sleep(max(delta, 0.001))
+
+# ── Notification checker ──────────────────────────────────────────────────────
+async def check_notifications(dec: dict):
+    probes   = dec['probes']
+    targets  = dec['probeTargets']
+    grill    = dec['grill']
+    setpoint = dec['setPoint']
+    n        = state['notified']
+
+    # Grill at temp
+    if not n['grill_at_temp'] and abs(grill - setpoint) <= 5 and grill <= setpoint + 5:
+        n['grill_at_temp'] = True
+        await notify('Smoker at Temperature', f'Grill reached {setpoint}°F set point.', tags='fire')
+    if n['grill_at_temp'] and grill < setpoint - 10:
+        n['grill_at_temp'] = False
+
+    # Grill over temp
+    if not n['grill_over_temp'] and grill > setpoint + 5:
+        n['grill_over_temp'] = True
+        await notify('⚠️ Smoker Over Temperature', f'Grill is {grill}°F — set point is {setpoint}°F.',
+                     priority='urgent', tags='rotating_light')
+    if n['grill_over_temp'] and grill <= setpoint + 5:
+        n['grill_over_temp'] = False
+
+    # Per-probe
+    for i, (temp, target) in enumerate(zip(probes, targets)):
+        if temp >= PROBE_DISCONNECTED or target >= PROBE_DISCONNECTED:
+            n['probe_at_temp'][i]   = False
+            n['probe_over_temp'][i] = False
+            continue
+
+        if not n['probe_at_temp'][i] and temp >= target:
+            n['probe_at_temp'][i] = True
+            await notify(f'Probe {i + 1} at Temperature', f'Probe {i + 1} reached {target}°F.',
+                         priority='high', tags='meat_on_bone')
+        if n['probe_at_temp'][i] and temp < target - 5:
+            n['probe_at_temp'][i] = False
+
+        if not n['probe_over_temp'][i] and temp > target + 5:
+            n['probe_over_temp'][i] = True
+            await notify(f'⚠️ Probe {i + 1} Over Temperature',
+                         f'Probe {i + 1} is {temp}°F — target is {target}°F.',
+                         priority='urgent', tags='rotating_light')
+        if n['probe_over_temp'][i] and temp <= target + 5:
+            n['probe_over_temp'][i] = False
 
 # ── BLE polling loop ──────────────────────────────────────────────────────────
 async def find_smoker():
@@ -156,16 +300,40 @@ async def poll_loop(interval: int):
                     print('Smoker reconnected.')
                     add_log('SYS', 'Smoker reconnected.', 'tag-sys', tick_time)
                     smoker_was_offline = False
+
+                # ── Update probe histories and compute server-side ETAs ────────
+                for i, (temp, target) in enumerate(zip(dec['probes'], dec['probeTargets'])):
+                    if temp >= PROBE_DISCONNECTED:
+                        # Probe disconnected — reset history and ETA
+                        state['probe_history'][i].clear()
+                        state['probe_eta'][i]     = None
+                        state['probe_stalled'][i] = False
+                    else:
+                        state['probe_history'][i].append({'temp': temp, 'ts': tick_time})
+                        eta_mins, stalled = compute_probe_eta(
+                            state['probe_history'][i], target, temp
+                        )
+                        state['probe_eta'][i]     = eta_mins
+                        state['probe_stalled'][i] = stalled
+                        if stalled:
+                            log.info(f'Probe {i + 1} stall detected at {temp}°F')
+
                 dec['ip']       = state['ip']
                 dec['address']  = state['address']
                 dec['rssi']     = state['rssi']
                 dec['ts']       = tick_time
                 dec['interval'] = state['interval']
+                dec['eta']      = state['probe_eta'][:]
+                dec['stalled']  = state['probe_stalled'][:]
+
                 state['last']  = dec
                 state['history'].append(dec)
                 cutoff = time.time() - HISTORY_MAX_AGE
                 state['history'] = [p for p in state['history'] if p['ts'] >= cutoff]
+
                 await broadcast(dec)
+                await check_notifications(dec)
+
                 probes_str = ', '.join(
                     f'{p}°F → {dec["probeTargets"][i]}°F' if p < PROBE_DISCONNECTED else 'NC'
                     for i, p in enumerate(dec['probes'])
@@ -226,8 +394,11 @@ async def websocket_endpoint(ws: WebSocket):
         log.info(f'Client disconnected  ({len(clients)} total)')
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-async def main(interval: int, port: int, address: str | None, adapter: str | None):
-    state['interval'] = interval
+async def main(interval: int, port: int, address: str | None, adapter: str | None, ntfy_topic: str):
+    state['interval']   = interval
+    state['ntfy_topic'] = ntfy_topic or None
+    if ntfy_topic:
+        print(f'Push notifications enabled (ntfy topic: {ntfy_topic})')
     if address:
         print(f'Using hardcoded address: {address}')
         state['address'] = address
@@ -248,11 +419,12 @@ async def main(interval: int, port: int, address: str | None, adapter: str | Non
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='BT Smoker Monitor')
-    parser.add_argument('--interval', type=int,  default=30,   help='Poll interval in seconds (default: 30)')
-    parser.add_argument('--port',     type=int,  default=8080, help='Web server port (default: 8080)')
-    parser.add_argument('--address',  type=str,  default=None, help='Hardcode BLE address, skipping discovery (e.g. AA:BB:CC:DD:EE:FF)')
-    parser.add_argument('--adapter',  type=str,  default=None, help='Bluetooth adapter to use (e.g. hci1). Defaults to system default.')
-    parser.add_argument('--debug',    action='store_true',     help='Enable verbose logging')
+    parser.add_argument('--interval',   type=int, default=30,   help='Poll interval in seconds (default: 30)')
+    parser.add_argument('--port',       type=int, default=8080, help='Web server port (default: 8080)')
+    parser.add_argument('--address',    type=str, default=None, help='Hardcode BLE address, skipping discovery (e.g. AA:BB:CC:DD:EE:FF)')
+    parser.add_argument('--adapter',    type=str, default=None, help='Bluetooth adapter to use (e.g. hci1). Defaults to system default.')
+    parser.add_argument('--ntfy-topic', type=str, default=os.environ.get('NTFY_TOPIC', ''), help='ntfy.sh topic for push notifications (or set NTFY_TOPIC env var)')
+    parser.add_argument('--debug',      action='store_true', help='Enable verbose logging')
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -260,4 +432,4 @@ if __name__ == '__main__':
         format='%(asctime)s  %(levelname)-8s  %(message)s',
         datefmt='%H:%M:%S',
     )
-    asyncio.run(main(args.interval, args.port, args.address, args.adapter))
+    asyncio.run(main(args.interval, args.port, args.address, args.adapter, args.ntfy_topic))

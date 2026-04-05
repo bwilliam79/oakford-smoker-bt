@@ -397,7 +397,7 @@ function updateDash(d) {
       document.getElementById(`valP${i+1}`).textContent    = p;
       document.getElementById(`valP${i+1}`).classList.remove('temp-na');
       document.getElementById(`targetP${i+1}`).textContent = target < PROBE_DISCONNECTED ? `Target: ${target}°F` : '';
-      updateEta(i, p, target);
+      displayEta(i, d.eta ? d.eta[i] : null, d.stalled ? d.stalled[i] : false);
     }
   });
 
@@ -413,63 +413,24 @@ function updateDash(d) {
   }
 }
 
-// ── ETA estimator ─────────────────────────────────────────────────────────────
-const HISTORY_MAX  = 10;
-const probeHistory = [[], []];
-
-function calcEta(history, currentTemp, target, elId, atTempThreshold = 0) {
-  const el = document.getElementById(elId);
+// ── ETA display (server-computed) ─────────────────────────────────────────────
+function displayEta(index, etaMins, stalled) {
+  const el = document.getElementById(`etaP${index + 1}`);
   if (!el) return;
-
-  if (currentTemp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) {
-    el.textContent = '';
-    el.closest('.temp-card')?.classList.remove('over-temp-p1', 'over-temp-p2');
+  if (stalled) {
+    el.textContent   = 'In stall – ETA paused';
+    el.style.color   = '#f97316';
+    el.style.fontStyle = 'italic';
     return;
   }
-
-  const card      = el.closest('.temp-card');
-  const overClass = card && card.classList.contains('probe2') ? 'over-temp-p2' : 'over-temp-p1';
-  if (currentTemp > target + 5) {
-    el.innerHTML = '⚠️ <strong style="color:#ef4444">Over Temperature</strong>';
-    el.style.color = '';
-    el.style.fontWeight = '';
-    if (card) card.classList.add(overClass);
-    return;
-  }
-
-  el.style.color = '';
-  el.style.fontWeight = '';
-  if (card) card.classList.remove('over-temp-p1', 'over-temp-p2');
-
-  if (currentTemp >= target) { el.textContent = 'At Temperature'; return; }
-
-  history.push({ temp: currentTemp, time: Date.now() });
-  if (history.length > HISTORY_MAX) history.shift();
-
-  if (history.length < 2) { el.textContent = 'Estimating…'; return; }
-
-  const oldest    = history[0];
-  const newest    = history[history.length - 1];
-  const ratePerMs = (newest.temp - oldest.temp) / (newest.time - oldest.time);
-
-  if (ratePerMs <= 0) { el.textContent = 'Estimating…'; return; }
-
-  const minRemaining = Math.round(((target - currentTemp) / ratePerMs) / 60000);
-
-  if (minRemaining < 1)       el.textContent = 'ETA < 1 min';
-  else if (minRemaining < 60) el.textContent = `ETA ~${minRemaining} min`;
-  else {
-    const h = Math.floor(minRemaining / 60);
-    const m = minRemaining % 60;
-    el.textContent = m > 0 ? `ETA ~${h}h ${m}m` : `ETA ~${h}h`;
-  }
-}
-
-function updateEta(probeIndex, currentTemp, target) {
-  if (currentTemp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) {
-    document.getElementById(`etaP${probeIndex + 1}`).textContent = ''; return;
-  }
-  calcEta(probeHistory[probeIndex], currentTemp, target, `etaP${probeIndex + 1}`);
+  el.style.color     = '';
+  el.style.fontStyle = '';
+  if (etaMins === null || etaMins === undefined) { el.textContent = 'Estimating…'; return; }
+  if (etaMins < 1)  { el.textContent = 'ETA < 1 min'; return; }
+  if (etaMins < 60) { el.textContent = `ETA ~${etaMins} min`; return; }
+  const h = Math.floor(etaMins / 60);
+  const m = etaMins % 60;
+  el.textContent = m > 0 ? `ETA ~${h}h ${m}m` : `ETA ~${h}h`;
 }
 
 // ── Alarms ────────────────────────────────────────────────────────────────────
@@ -646,13 +607,6 @@ function connect() {
     if (d.type === 'history') {
       d.data.forEach(pt => pushChartPoint(pt, new Date(pt.ts * 1000), true));
       chart.update();
-
-      // Restore probe ETA history from the last HISTORY_MAX points
-      d.data.slice(-HISTORY_MAX).forEach(pt => {
-        pt.probes.forEach((temp, i) => {
-          if (temp < PROBE_DISCONNECTED) probeHistory[i].push({ temp, time: pt.ts * 1000 });
-        });
-      });
 
       // Restore at-temp timer: find the start of the current consecutive at-temp streak
       if (d.smoker_online && d.data.length) {
