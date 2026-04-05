@@ -10,6 +10,7 @@ import argparse
 import math
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -275,9 +276,11 @@ async def scan_and_read() -> tuple[dict | None, object | None, int | None]:
 
     print(f'Found: {found_device.name}  ({found_device.address})  RSSI: {found_rssi} dBm')
 
+    # Do NOT pass bluez adapter kwarg to BleakClient — the BLEDevice already
+    # carries the correct adapter's D-Bus path from the scanner.  Specifying
+    # the adapter explicitly here triggers a different BlueZ connection path
+    # that causes le-connection-abort-by-local on Realtek adapters.
     client_kwargs = {'timeout': 45}
-    if state['adapter']:
-        client_kwargs['bluez'] = {'adapter': state['adapter']}
 
     client = BleakClient(found_device, **client_kwargs)
     try:
