@@ -115,7 +115,11 @@ async def poll_loop(interval: int):
 
         # Discover smoker if we don't have an address yet
         if not state['address']:
-            state['address'] = await find_smoker()
+            try:
+                state['address'] = await find_smoker()
+            except Exception as e:
+                log.warning(f'BLE scan error: {e}')
+                state['address'] = None
             if not state['address']:
                 await broadcast({'smoker_offline': True})
                 if not smoker_was_offline:
@@ -131,7 +135,7 @@ async def poll_loop(interval: int):
             if rssi is not None:
                 state['rssi'] = rssi
 
-            kwargs = {'timeout': 15}
+            kwargs = {'timeout': 30}
             if state['adapter']:
                 kwargs['bluez'] = {'adapter': state['adapter']}
             async with BleakClient(state['address'], **kwargs) as client:
@@ -168,8 +172,9 @@ async def poll_loop(interval: int):
                 )
                 log.info(f'Smoker: {dec["grill"]}°F  Set: {dec["setPoint"]}°F  Probes: [{probes_str}]')
 
-        except (BleakError, Exception):
+        except (BleakError, Exception) as e:
             await broadcast({'smoker_offline': True})
+            print(f'BLE connect error: {type(e).__name__}: {e}')
             if not smoker_was_offline:
                 print('Smoker unreachable — will keep retrying.')
                 add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', tick_time)
