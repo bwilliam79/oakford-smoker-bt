@@ -419,9 +419,10 @@ async def get_adapters():
             for hci_link in sorted(bt_dir.iterdir()):
                 hci_id = hci_link.name
                 real = hci_link.resolve()
-                # Walk up from .../bluetooth/hciX -> interface dir -> USB device dir
-                usb_intf = real.parent  # e.g. .../3-2:1.0
-                usb_dev = usb_intf.parent  # e.g. .../3-2
+                # Walk up from .../bluetooth/hciX until we find a dir with a 'product' file
+                usb_dev = real.parent
+                while usb_dev != usb_dev.parent and not (usb_dev / 'product').exists():
+                    usb_dev = usb_dev.parent
                 product = _read_sysfs(usb_dev / 'product')
                 manufacturer = _read_sysfs(usb_dev / 'manufacturer')
                 # Build a friendly label from USB descriptor strings
