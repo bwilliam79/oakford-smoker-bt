@@ -411,30 +411,45 @@ async def post_config(body: dict):
 
 @app.get('/api/adapters')
 async def get_adapters():
-    """List available Bluetooth adapters with friendly names via hciconfig."""
+    """List available Bluetooth adapters with USB product names from sysfs."""
     adapters = []
     try:
-        result = subprocess.run(['hciconfig', '-a'], capture_output=True, text=True, timeout=5)
-        current = None
-        for line in result.stdout.splitlines():
-            if line and not line[0].isspace() and ':' in line:
-                hci = line.split(':')[0].strip()
-                current = {'id': hci, 'name': '', 'address': '', 'bus': '', 'up': False}
-                adapters.append(current)
-            elif current:
-                stripped = line.strip()
-                if stripped.startswith('BD Address:'):
-                    current['address'] = stripped.split('BD Address:')[1].split()[0]
-                if stripped.startswith('Name:'):
-                    current['name'] = stripped.split("'")[1] if "'" in stripped else stripped.split('Name:')[1].strip()
-                if 'Bus:' in stripped:
-                    bus_part = stripped.split('Bus:')[1].strip().split()[0] if 'Bus:' in stripped else ''
-                    current['bus'] = bus_part
-                if 'UP' in stripped.split() and 'RUNNING' in stripped.split():
-                    current['up'] = True
+        bt_dir = Path('/sys/class/bluetooth')
+        if bt_dir.exists():
+            for hci_link in sorted(bt_dir.iterdir()):
+                hci_id = hci_link.name
+                real = hci_link.resolve()
+                # Walk up from .../bluetooth/hciX -> interface dir -> USB device dir
+                usb_intf = real.parent  # e.g. .../3-2:1.0
+                usb_dev = usb_intf.parent  # e.g. .../3-2
+                product = _read_sysfs(usb_dev / 'product')
+                manufacturer = _read_sysfs(usb_dev / 'manufacturer')
+                # Build a friendly label from USB descriptor strings
+                if manufacturer and product:
+                    name = f'{manufacturer} {product}' if manufacturer not in product else product
+                elif product:
+                    name = product
+                else:
+                    name = ''
+                # Check if adapter is up via hciconfig (faster than parsing operstate)
+                up = False
+                try:
+                    result = subprocess.run(['hciconfig', hci_id], capture_output=True, text=True, timeout=3)
+                    up = 'UP RUNNING' in result.stdout
+                except Exception:
+                    pass
+                adapters.append({'id': hci_id, 'name': name, 'up': up})
     except Exception as e:
         log.warning(f'Failed to enumerate adapters: {e}')
     return {'adapters': adapters, 'current': state.get('adapter') or ''}
+
+
+def _read_sysfs(path: Path) -> str:
+    """Read a single-line sysfs attribute, returning '' on any failure."""
+    try:
+        return path.read_text().strip()
+    except Exception:
+        return ''
 
 @app.post('/api/clear-history')
 async def clear_history():

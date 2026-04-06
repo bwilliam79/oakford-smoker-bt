@@ -409,8 +409,8 @@ async function openSettings() {
         const opt   = document.createElement('option');
         opt.value   = a.id;
         const label = a.name ? `${a.id} — ${a.name}` : a.id;
-        const info  = [a.bus, a.address, a.up ? 'UP' : 'DOWN'].filter(Boolean).join(', ');
-        opt.textContent = `${label}  (${info})`;
+        const status = a.up ? 'UP' : 'DOWN';
+        opt.textContent = `${label}  (${status})`;
         if (a.id === current) opt.selected = true;
         select.appendChild(opt);
       });
