@@ -124,6 +124,7 @@ app      = FastAPI()
 clients: set[WebSocket] = set()
 state    = {
     'last':          None,
+    'smoker_online': False,
     'ip':            None,
     'address':       None,   # string address
     'ble_device':    None,   # BLEDevice object from last scan
@@ -315,6 +316,7 @@ async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool
     dec['stalled']  = state['probe_stalled'][:]
 
     state['last'] = dec
+    state['smoker_online'] = True
     state['history'].append(dec)
     cutoff = time.time() - HISTORY_MAX_AGE
     state['history'] = [p for p in state['history'] if p['ts'] >= cutoff]
@@ -343,6 +345,7 @@ async def poll_loop(interval: int):
                 smoker_was_offline = await _process_reading(dec, tick_time, smoker_was_offline, ble_device, rssi)
             else:
                 # Scan found nothing
+                state['smoker_online'] = False
                 await broadcast({'smoker_offline': True})
                 if not smoker_was_offline:
                     print('Smoker not found — will keep retrying.')
@@ -352,6 +355,7 @@ async def poll_loop(interval: int):
 
         except (BleakError, Exception) as e:
             print(f'BLE error: {type(e).__name__}: {e}')
+            state['smoker_online'] = False
             await broadcast({'smoker_offline': True})
             if not smoker_was_offline:
                 print('Smoker unreachable — will keep retrying.')
@@ -401,8 +405,8 @@ async def websocket_endpoint(ws: WebSocket):
     clients.add(ws)
     log.info(f'Client connected  ({len(clients)} total)')
     if state['history'] or state['log_history']:
-        await ws.send_text(json.dumps({'type': 'history', 'data': state['history'], 'logs': state['log_history'], 'smoker_online': state['last'] is not None}))
-    elif state['last']:
+        await ws.send_text(json.dumps({'type': 'history', 'data': state['history'], 'logs': state['log_history'], 'smoker_online': state['smoker_online']}))
+    elif state['last'] and state['smoker_online']:
         await ws.send_text(json.dumps(state['last']))
     try:
         while True:
