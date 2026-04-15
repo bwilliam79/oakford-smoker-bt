@@ -453,6 +453,25 @@ def _read_sysfs(path: Path) -> str:
     except Exception:
         return ''
 
+@app.post('/api/ntfy-test')
+async def ntfy_test():
+    topic = state.get('ntfy_topic')
+    if not topic:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({'error': 'No ntfy topic configured'}, status_code=400)
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(
+            None, _ntfy_post, topic,
+            'BT Smoker Monitor Test',
+            f'Test notification from BT Smoker Monitor.',
+            'default', 'fire,white_check_mark'
+        )
+        return {'ok': True}
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({'error': str(e)}, status_code=502)
+
 @app.post('/api/clear-history')
 async def clear_history():
     state['history'].clear()

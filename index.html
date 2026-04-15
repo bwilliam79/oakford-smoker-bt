@@ -240,8 +240,12 @@
     </div>
     <div class="modal-row">
       <label class="modal-label" for="ntfyInput">ntfy.sh Push Notification Topic</label>
-      <input id="ntfyInput" class="modal-input" type="text"
-             placeholder="e.g. bwwilliams-smoker-monitor" autocomplete="off" />
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="ntfyInput" class="modal-input" type="text"
+               placeholder="e.g. bwwilliams-smoker-monitor" autocomplete="off" />
+        <button id="ntfyTestBtn" class="modal-cancel" style="white-space:nowrap;flex-shrink:0;" onclick="testNtfy()">Test</button>
+      </div>
+      <span id="ntfyTestStatus" class="modal-hint" style="display:none;"></span>
       <span class="modal-hint">
         Receive alerts on your phone via <a href="https://ntfy.sh" target="_blank">ntfy.sh</a>.
         Leave blank to disable.
@@ -448,6 +452,33 @@ async function saveSettings() {
     setTimeout(closeSettings, 1200);
   } catch (e) {
     log('ERROR', `Failed to save settings: ${e}`, 'tag-error');
+  }
+}
+
+async function testNtfy() {
+  const btn      = document.getElementById('ntfyTestBtn');
+  const statusEl = document.getElementById('ntfyTestStatus');
+  btn.disabled   = true;
+  btn.textContent = 'Sending…';
+  statusEl.style.display = 'none';
+  try {
+    const res  = await fetch('/api/ntfy-test', { method: 'POST' });
+    const data = await res.json();
+    statusEl.style.display = 'inline';
+    if (res.ok) {
+      statusEl.style.color   = '#22c55e';
+      statusEl.textContent   = 'Test sent! Check your ntfy app.';
+    } else {
+      statusEl.style.color   = '#ef4444';
+      statusEl.textContent   = 'Failed: ' + (data.error || 'Unknown error');
+    }
+  } catch (e) {
+    statusEl.style.display = 'inline';
+    statusEl.style.color   = '#ef4444';
+    statusEl.textContent   = 'Error: ' + e.message;
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = 'Test';
   }
 }
 
