@@ -1,0 +1,13 @@
+services:
+  bt-smoker-monitor:
+    build: .
+    container_name: smoker
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    security_opt:
+      - label=disable
+    volumes:
+      - /run/dbus:/run/dbus
+      - ./data:/data
+    command: --adapter hci2 --interval 30 --port 8888
