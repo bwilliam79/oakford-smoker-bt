@@ -9,14 +9,15 @@ import argparse
 import math
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from bleak import BleakScanner, BleakClient, BleakError
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request as FastAPIRequest, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # ── BLE UUIDs ────────────────────────────────────────────────────────────────
@@ -31,6 +32,21 @@ CONFIG_PATH        = Path('/data/config.json')
 # ── ETA / stall constants ─────────────────────────────────────────────────────
 STALL_WINDOW_SECS = 20 * 60   # how far back to look for a stall (20 min)
 STALL_THRESHOLD_F = 2.0       # °F range within stall window that counts as stalled
+
+# ── BLE reconnect backoff ────────────────────────────────────────────────────
+BACKOFF_START_SECS = 5
+BACKOFF_MAX_SECS   = 60
+
+# ── WebSocket idle cleanup ───────────────────────────────────────────────────
+WS_IDLE_TIMEOUT_SECS = 120   # drop connections with no pong/activity for this long
+WS_REAPER_INTERVAL   = 30    # how often to sweep stale clients
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+AUTH_TOKEN = os.environ.get('AUTH_TOKEN', '').strip() or None
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+_default_origins = 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:8888,http://127.0.0.1:8888'
+CORS_ORIGINS = [o.strip() for o in os.environ.get('CORS_ORIGINS', _default_origins).split(',') if o.strip()]
 
 log = logging.getLogger('smoker')
 
@@ -103,15 +119,20 @@ def compute_probe_eta(history: list[dict], target: int, current_temp: int) -> tu
 # ── ntfy.sh push notifications ────────────────────────────────────────────────
 def _ntfy_post(topic: str, title: str, message: str, priority: str, tags: str):
     try:
-        req = Request(f'https://ntfy.sh/{topic}', data=message.encode(), method='POST')
+        # URL-encode topic so special chars like ?, #, /, etc. can't break the URL path.
+        # urllib.request.urlopen uses HTTPS with TLS certificate verification by default
+        # (via the system's SSL/TLS trust store). Explicit `verify` isn't a thing on
+        # urlopen — if we ever switch to `requests`, add `verify=True`.
+        safe_topic = quote(topic, safe='')
+        req = Request(f'https://ntfy.sh/{safe_topic}', data=message.encode(), method='POST')
         req.add_header('Title', title)
         req.add_header('Priority', priority)
         if tags:
             req.add_header('Tags', tags)
         with urlopen(req, timeout=5):
             pass
-    except Exception as e:
-        log.warning(f'ntfy notification failed: {e}')
+    except Exception:
+        log.exception('ntfy notification failed')
 
 async def notify(title: str, message: str, priority: str = 'default', tags: str = ''):
     topic = state.get('ntfy_topic')
@@ -122,7 +143,15 @@ async def notify(title: str, message: str, priority: str = 'default', tags: str 
 
 # ── App state ─────────────────────────────────────────────────────────────────
 app      = FastAPI()
-clients: set[WebSocket] = set()
+# Register CORS once — allow localhost by default, configurable via CORS_ORIGINS env var.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+clients: dict = {}   # ws -> last_seen_ts
 state    = {
     'last':          None,
     'smoker_online': False,
@@ -148,18 +177,28 @@ state    = {
     },
 }
 
+# ── Auth middleware for /api/* routes ────────────────────────────────────────
+@app.middleware('http')
+async def auth_middleware(request: FastAPIRequest, call_next):
+    if AUTH_TOKEN and request.url.path.startswith('/api/'):
+        if request.headers.get('X-Auth-Token') != AUTH_TOKEN:
+            return JSONResponse({'error': 'Unauthorized'}, status_code=401)
+    return await call_next(request)
+
 # ── WebSocket broadcast ───────────────────────────────────────────────────────
 async def broadcast(msg: dict):
     if not clients:
         return
     text = json.dumps(msg)
-    dead = set()
-    for ws in clients:
+    dead = []
+    for ws in list(clients.keys()):
         try:
             await ws.send_text(text)
         except Exception:
-            dead.add(ws)
-    clients.difference_update(dead)
+            log.exception('WebSocket send failed; dropping client')
+            dead.append(ws)
+    for ws in dead:
+        clients.pop(ws, None)
 
 # ── Config file ───────────────────────────────────────────────────────────────
 def load_config() -> dict:
@@ -167,8 +206,8 @@ def load_config() -> dict:
     try:
         if CONFIG_PATH.exists():
             return json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
-    except Exception as e:
-        log.warning(f'Could not read config file: {e}')
+    except Exception:
+        log.exception('Could not read config file')
     return {}
 
 def save_config(ntfy_topic: str, adapter: str = '') -> None:
@@ -179,8 +218,8 @@ def save_config(ntfy_topic: str, adapter: str = '') -> None:
         if adapter:
             data['adapter'] = adapter
         CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
-    except Exception as e:
-        log.warning(f'Could not write config file: {e}')
+    except Exception:
+        log.exception('Could not write config file')
 
 # ── Server-side log history ───────────────────────────────────────────────────
 def add_log(tag: str, msg: str, cls: str, ts: float):
@@ -275,13 +314,13 @@ async def scan_and_read() -> tuple[dict | None, object | None, int | None]:
     print(f'Found: {found_device.name}  ({found_device.address})  RSSI: {found_rssi} dBm')
 
     async with BleakClient(found_device, timeout=45) as client:
-        if not state['ip']:
-            try:
-                raw_ip = await client.read_gatt_char(CHAR_IP)
-                state['ip'] = ''.join(chr(b) for b in raw_ip if 32 <= b < 127)
-                print(f'Smoker IP: {state["ip"]}')
-            except Exception:
-                pass
+        # Always re-read IP on reconnect so we don't serve a stale address forever.
+        try:
+            raw_ip = await client.read_gatt_char(CHAR_IP)
+            state['ip'] = ''.join(chr(b) for b in raw_ip if 32 <= b < 127)
+            print(f'Smoker IP: {state["ip"]}')
+        except Exception:
+            log.exception('Failed to read smoker IP over GATT; leaving IP as-is')
         raw = await client.read_gatt_char(CHAR_TEMP)
         return decode_packet(bytes(raw)), found_device, found_rssi
 
@@ -311,14 +350,15 @@ async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool
             if stalled:
                 log.info(f'Probe {i + 1} stall detected at {temp}°F')
 
-    dec['ip']       = state['ip']
-    dec['address']  = state['address']
-    dec['adapter']  = state.get('adapter') or 'default'
-    dec['rssi']     = state['rssi']
-    dec['ts']       = tick_time
-    dec['interval'] = state['interval']
-    dec['eta']      = state['probe_eta'][:]
-    dec['stalled']  = state['probe_stalled'][:]
+    dec['ip']        = state['ip']
+    dec['address']   = state['address']
+    dec['adapter']   = state.get('adapter') or 'default'
+    dec['rssi']      = state['rssi']
+    dec['ts']        = tick_time
+    dec['interval']  = state['interval']
+    dec['eta']       = state['probe_eta'][:]
+    dec['stalled']   = state['probe_stalled'][:]
+    dec['connected'] = True
 
     state['last'] = dec
     state['smoker_online'] = True
@@ -336,40 +376,77 @@ async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool
     log.info(f'Smoker: {dec["grill"]}°F  Set: {dec["setPoint"]}°F  Probes: [{probes_str}]')
     return smoker_was_offline
 
+def _mark_disconnected():
+    """Clear stale temp/probe values and flag the cached 'last' payload as disconnected."""
+    state['smoker_online'] = False
+    state['rssi'] = None
+    state['ip']   = None   # will be re-read on reconnect
+    state['probe_eta']     = [None, None]
+    state['probe_stalled'] = [False, False]
+    # Keep state['last'] around so /api/state clients know the last seen targets/etc.,
+    # but flip `connected` to False and null out live temps so UI can show "offline".
+    if state['last'] is not None:
+        last = state['last']
+        last['connected'] = False
+        last['grill']     = None
+        last['probes']    = [None, None]
+        last['rssi']      = None
+        last['eta']       = [None, None]
+        last['stalled']   = [False, False]
+
 async def poll_loop(interval: int):
     smoker_was_offline = False
+    backoff = BACKOFF_START_SECS
     await sleep_to_next_tick(interval)
     print(f'Polling aligned — first tick at {time.strftime("%H:%M:%S")}')
     while True:
         tick_time = math.floor(time.time() / interval) * interval
 
+        success = False
         try:
             dec, ble_device, rssi = await scan_and_read()
 
             if dec:
                 smoker_was_offline = await _process_reading(dec, tick_time, smoker_was_offline, ble_device, rssi)
+                success = True
+                backoff = BACKOFF_START_SECS   # reset backoff on any good read
             else:
                 # Scan found nothing
-                state['smoker_online'] = False
-                await broadcast({'smoker_offline': True})
+                _mark_disconnected()
+                await broadcast({'smoker_offline': True, 'connected': False})
                 if not smoker_was_offline:
                     print('Smoker not found — will keep retrying.')
                     add_log('WARN', 'Smoker offline — retrying…', 'tag-warn', time.time())
                     await notify('Smoker Disconnected', 'Lost connection to smoker. Retrying…', tags='warning')
                     smoker_was_offline = True
 
-        except (BleakError, Exception) as e:
-            print(f'BLE error: {type(e).__name__}: {e}')
-            state['smoker_online'] = False
-            await broadcast({'smoker_offline': True})
+        except BleakError:
+            log.exception('BLE error during scan/read')
+            _mark_disconnected()
+            await broadcast({'smoker_offline': True, 'connected': False})
+            if not smoker_was_offline:
+                print('Smoker unreachable — will keep retrying.')
+                add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', tick_time)
+                await notify('Smoker Disconnected', 'Lost connection to smoker. Retrying…', tags='warning')
+                smoker_was_offline = True
+        except Exception:
+            log.exception('Unexpected error in poll loop')
+            _mark_disconnected()
+            await broadcast({'smoker_offline': True, 'connected': False})
             if not smoker_was_offline:
                 print('Smoker unreachable — will keep retrying.')
                 add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', tick_time)
                 await notify('Smoker Disconnected', 'Lost connection to smoker. Retrying…', tags='warning')
                 smoker_was_offline = True
 
-        sleep_for = tick_time + interval - time.time()
-        await asyncio.sleep(max(sleep_for, 0.001))
+        if success:
+            # Clock-aligned sleep until the next poll tick
+            sleep_for = tick_time + interval - time.time()
+            await asyncio.sleep(max(sleep_for, 0.001))
+        else:
+            # Exponential backoff when we can't reach the smoker — avoid thrashing the adapter
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, BACKOFF_MAX_SECS)
 
 # ── HTTP / WebSocket routes ───────────────────────────────────────────────────
 @app.get('/')
@@ -378,12 +455,16 @@ async def index():
 
 @app.get('/favicon.svg')
 async def favicon():
-    from fastapi.responses import Response
     return Response(Path('favicon.svg').read_bytes(), media_type='image/svg+xml')
 
 @app.get('/api/state')
 async def api_state():
-    return state['last'] or {}
+    last = state['last'] or {}
+    # Always surface the current connection status on top of the cached payload.
+    if last:
+        last = dict(last)
+        last['connected'] = bool(state.get('smoker_online'))
+    return last
 
 @app.get('/api/config')
 async def get_config():
@@ -439,10 +520,10 @@ async def get_adapters():
                     result = subprocess.run(['hciconfig', hci_id], capture_output=True, text=True, timeout=3)
                     up = 'UP RUNNING' in result.stdout
                 except Exception:
-                    pass
+                    log.exception(f'hciconfig lookup failed for {hci_id}')
                 adapters.append({'id': hci_id, 'name': name, 'up': up})
-    except Exception as e:
-        log.warning(f'Failed to enumerate adapters: {e}')
+    except Exception:
+        log.exception('Failed to enumerate adapters')
     return {'adapters': adapters, 'current': state.get('adapter') or ''}
 
 
@@ -457,7 +538,6 @@ def _read_sysfs(path: Path) -> str:
 async def ntfy_test():
     topic = state.get('ntfy_topic')
     if not topic:
-        from fastapi.responses import JSONResponse
         return JSONResponse({'error': 'No ntfy topic configured'}, status_code=400)
     loop = asyncio.get_event_loop()
     try:
@@ -469,7 +549,7 @@ async def ntfy_test():
         )
         return {'ok': True}
     except Exception as e:
-        from fastapi.responses import JSONResponse
+        log.exception('ntfy test notification failed')
         return JSONResponse({'error': str(e)}, status_code=502)
 
 @app.post('/api/clear-history')
@@ -482,7 +562,7 @@ async def clear_history():
 @app.websocket('/ws')
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
-    clients.add(ws)
+    clients[ws] = time.time()
     log.info(f'Client connected  ({len(clients)} total)')
     if state['history'] or state['log_history']:
         await ws.send_text(json.dumps({'type': 'history', 'data': state['history'], 'logs': state['log_history'], 'smoker_online': state['smoker_online']}))
@@ -490,12 +570,31 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.send_text(json.dumps(state['last']))
     try:
         while True:
-            await ws.receive_text()  # keep-alive (pings)
+            # Any inbound frame (including FastAPI/Uvicorn protocol-level pings that
+            # arrive as text) refreshes the last-seen timestamp.
+            await ws.receive_text()
+            clients[ws] = time.time()
     except WebSocketDisconnect:
         pass
+    except Exception:
+        log.exception('WebSocket loop error')
     finally:
-        clients.discard(ws)
+        clients.pop(ws, None)
         log.info(f'Client disconnected  ({len(clients)} total)')
+
+async def ws_reaper():
+    """Drop WebSocket connections that have had no inbound activity for WS_IDLE_TIMEOUT_SECS."""
+    while True:
+        await asyncio.sleep(WS_REAPER_INTERVAL)
+        now = time.time()
+        stale = [ws for ws, ts in clients.items() if now - ts > WS_IDLE_TIMEOUT_SECS]
+        for ws in stale:
+            try:
+                await ws.close(code=1001)
+            except Exception:
+                pass
+            clients.pop(ws, None)
+            log.info(f'Reaped idle WebSocket client  ({len(clients)} total)')
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 async def main(interval: int, port: int, address: str | None, adapter: str | None, ntfy_topic: str):
@@ -519,6 +618,12 @@ async def main(interval: int, port: int, address: str | None, adapter: str | Non
         print(f'Using hardcoded address: {address}')
         state['address'] = address
 
+    if AUTH_TOKEN:
+        print('Auth enabled: /api/* routes require X-Auth-Token header.')
+    else:
+        log.warning('AUTH_TOKEN is not set — /api/* routes are unauthenticated. Set AUTH_TOKEN env var to require auth.')
+        print('WARNING: AUTH_TOKEN not set — /api/* is open. Set AUTH_TOKEN in env to lock it down.')
+
     print(f'Starting web server on http://0.0.0.0:{port}')
 
     server_cfg = uvicorn.Config(app, host='0.0.0.0', port=port, log_level='warning')
@@ -526,6 +631,7 @@ async def main(interval: int, port: int, address: str | None, adapter: str | Non
 
     await asyncio.gather(
         poll_loop(interval),
+        ws_reaper(),
         server.serve(),
     )
 
@@ -534,7 +640,7 @@ if __name__ == '__main__':
     parser.add_argument('--interval',   type=int, default=30,   help='Poll interval in seconds (default: 30)')
     parser.add_argument('--port',       type=int, default=8080, help='Web server port (default: 8080)')
     parser.add_argument('--address',    type=str, default=None, help='Hardcode BLE address, skipping discovery (e.g. AA:BB:CC:DD:EE:FF)')
-    parser.add_argument('--adapter',    type=str, default=None, help='Bluetooth adapter to use (e.g. hci1). Defaults to system default.')
+    parser.add_argument('--adapter',    type=str, default=os.environ.get('BT_ADAPTER') or None, help='Bluetooth adapter to use (e.g. hci1). Defaults to BT_ADAPTER env var, then system default.')
     parser.add_argument('--ntfy-topic', type=str, default=os.environ.get('NTFY_TOPIC', ''), help='ntfy.sh topic for push notifications (or set NTFY_TOPIC env var)')
     parser.add_argument('--debug',      action='store_true', help='Enable verbose logging')
     args = parser.parse_args()

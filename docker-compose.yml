@@ -3,11 +3,30 @@ services:
     build: .
     container_name: smoker
     restart: unless-stopped
+    # `privileged: true` is kept because BlueZ/BLE on Linux reliably needs access
+    # to raw HCI sockets (CAP_NET_ADMIN + CAP_NET_RAW) and the D-Bus system bus.
+    # In testing, dropping privileged + granting only specific caps has caused
+    # intermittent adapter failures on Realtek hardware. Revisit if you have a
+    # confirmed reproducible capability set that works on this hardware.
     privileged: true
+    # network_mode: host is required — BlueZ communicates with the kernel via
+    # raw HCI sockets that aren't routable through Docker's bridge network.
     network_mode: host
+    # label=disable is kept to avoid SELinux/AppArmor interfering with the
+    # /run/dbus mount on RHEL-family hosts. Remove if your host isn't using
+    # labeling MAC (e.g. plain Debian/Ubuntu without AppArmor profiles for Docker).
     security_opt:
       - label=disable
     volumes:
       - /run/dbus:/run/dbus
       - ./data:/data
-    command: --adapter hci2 --interval 30 --port 8888
+    # BT_ADAPTER is read by server.py as the default --adapter value. Unset to
+    # let BlueZ pick the system default (usually hci0).
+    environment:
+      - BT_ADAPTER=${BT_ADAPTER:-hci2}
+      # AUTH_TOKEN: if set, /api/* requires header `X-Auth-Token: <value>`.
+      # Leave unset for open LAN-only access (a warning is logged on startup).
+      - AUTH_TOKEN=${AUTH_TOKEN:-}
+      # CORS_ORIGINS: comma-separated list of allowed Origin headers.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8888,http://127.0.0.1:8888}
+    command: --interval 30 --port 8888

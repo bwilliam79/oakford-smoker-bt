@@ -360,12 +360,25 @@ function log(tag, msg, cls='tag-info', date = new Date()) {
   const c = document.getElementById('log');
   const el = document.createElement('div');
   el.className = 'log-entry';
-  el.innerHTML = `<span class="log-ts">${fmtTime(date)}</span><span class="log-tag ${cls}">[${tag}]</span><span class="log-msg">${esc(msg)}</span>`;
+  // Build the entry as DOM nodes instead of innerHTML so tag/msg/cls text
+  // can never be interpreted as HTML (defense-in-depth even though server
+  // controls these values today).
+  const tsSpan = document.createElement('span');
+  tsSpan.className = 'log-ts';
+  tsSpan.textContent = fmtTime(date);
+  const tagSpan = document.createElement('span');
+  // Whitelist the tag class to the known tag-* set; fall back to tag-info if untrusted.
+  const safeCls = /^tag-[a-z]+$/.test(cls) ? cls : 'tag-info';
+  tagSpan.className = `log-tag ${safeCls}`;
+  tagSpan.textContent = `[${tag}]`;
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'log-msg';
+  msgSpan.textContent = String(msg);
+  el.append(tsSpan, tagSpan, msgSpan);
   c.appendChild(el);
   c.scrollTop = c.scrollHeight;
   document.getElementById('logCount').textContent = ++logEntries;
 }
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function setStatus(cls, text) {
   document.getElementById('statusDot').className = 'dot ' + cls;
   document.getElementById('statusText').textContent = text;
@@ -381,7 +394,8 @@ function toggleLog() {
   chevron.textContent = collapsed ? '▼' : '▶';
 }
 function clearLog() {
-  document.getElementById('log').innerHTML = '';
+  // Use textContent instead of innerHTML for plain clearing.
+  document.getElementById('log').textContent = '';
   logEntries = 0;
   document.getElementById('logCount').textContent = 0;
 }
@@ -406,9 +420,14 @@ async function openSettings() {
 
     const select  = document.getElementById('adapterSelect');
     const current = cfg.adapter || '';
-    select.innerHTML = '';
+    // Clear existing options without innerHTML; adapter ids come from server sysfs
+    // but we build DOM nodes anyway so nothing can be misinterpreted as markup.
+    select.textContent = '';
     if (adapters.adapters.length === 0) {
-      select.innerHTML = '<option value="">No adapters found</option>';
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No adapters found';
+      select.appendChild(opt);
     } else {
       adapters.adapters.forEach(a => {
         const opt   = document.createElement('option');
@@ -651,7 +670,13 @@ function startGrillOverTempAlarm() {
   if (grillOverTempInterval) return;
   stopGrillAtTempTimer();
   const el = document.getElementById('grillAtTempTimer');
-  el.innerHTML = '⚠️ <strong style="color:#ef4444">Over Temperature</strong>';
+  // Build DOM nodes rather than innerHTML (static HTML, but keep consistent).
+  el.textContent = '';
+  el.append('\u26A0\uFE0F ');
+  const strong = document.createElement('strong');
+  strong.style.color = '#ef4444';
+  strong.textContent = 'Over Temperature';
+  el.append(strong);
   document.getElementById('cardGrill').classList.add('over-temp-grill');
   playSiren();
   grillOverTempInterval = setInterval(playSiren, 30_000);
@@ -731,7 +756,13 @@ function checkAlarms(d) {
     stopGrillAtTempTimer();
     grillAlarmFired = false;
     const el = document.getElementById('grillAtTempTimer');
-    el.innerHTML = '<strong style="color:#facc15;font-weight:bold">Under Temperature</strong>';
+    // Build DOM nodes rather than innerHTML (static HTML, but keep consistent).
+    el.textContent = '';
+    const strong = document.createElement('strong');
+    strong.style.color = '#facc15';
+    strong.style.fontWeight = 'bold';
+    strong.textContent = 'Under Temperature';
+    el.appendChild(strong);
   } else if (!grillOverTempFired) {
     stopGrillAtTempTimer();
     document.getElementById('grillAtTempTimer').textContent = '';
@@ -760,7 +791,9 @@ function checkAlarms(d) {
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function connect() {
-  const wsUrl = `ws://${location.host}/ws`;
+  // Match the page's scheme: wss:// when served over HTTPS, ws:// otherwise.
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/ws`;
   log('SYS', `Connecting to ${wsUrl}…`, 'tag-sys');
   const ws = new WebSocket(wsUrl);
 
@@ -847,11 +880,9 @@ function connect() {
     setStatus('disconnected', 'Connection error — reconnecting in 5s…');
   };
 
-  // Send a ping every 30s to keep the connection alive through proxies
-  const ping = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) ws.send('ping');
-    else clearInterval(ping);
-  }, 30000);
+  // No client-side keep-alive: FastAPI/Uvicorn sends protocol-level WebSocket
+  // pings by default, and the server reaps idle connections. A text "ping"
+  // frame here would bypass those mechanisms without helping proxies anyway.
 }
 
 connect();
