@@ -23,8 +23,16 @@
         radial-gradient(ellipse at 80% 108%, rgba(249,115,22,0.20) 0%, transparent 38%),
         radial-gradient(ellipse at 50% 0%,   rgba(0,0,0,0.6)       0%, transparent 60%),
         linear-gradient(180deg, #0c0704 0%, #0a0603 100%);
+      background-attachment: fixed;
       color: #e0e0e0;
-      min-height: 100vh; padding: 24px;
+      min-height: 100vh;
+      /* Respect iPhone status bar / Dynamic Island / home indicator when
+         installed as a PWA with apple-mobile-web-app-status-bar-style=black-translucent. */
+      padding: 24px;
+      padding-top: calc(24px + env(safe-area-inset-top));
+      padding-bottom: calc(24px + env(safe-area-inset-bottom));
+      padding-left: calc(24px + env(safe-area-inset-left));
+      padding-right: calc(24px + env(safe-area-inset-right));
       overflow-x: hidden;
     }
 
@@ -178,7 +186,10 @@
 
     /* ── Settings modal ── */
     .cfg-btn {
-      position: fixed; top: 14px; right: 16px; z-index: 100;
+      position: fixed;
+      top: calc(14px + env(safe-area-inset-top));
+      right: calc(16px + env(safe-area-inset-right));
+      z-index: 100;
       background: rgba(20,10,4,0.8); border: 1px solid #3d1f0a;
       border-radius: 8px; padding: 6px 8px; cursor: pointer;
       color: #f97316; font-size: 1.1rem; line-height: 1;

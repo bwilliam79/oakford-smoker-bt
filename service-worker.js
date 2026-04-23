@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bt-smoker-v1';
+const CACHE_NAME = 'bt-smoker-v2';
 const urlsToCache = [
   '/',
   '/index.html',

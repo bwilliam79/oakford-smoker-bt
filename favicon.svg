@@ -1,4 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- App background: dark rounded square so the icon reads on any home-screen color -->
+  <rect width="32" height="32" rx="6" fill="#0c0704"/>
   <!-- Smoke puffs (warmer tone) -->
   <circle cx="22"   cy="3"   r="2"   fill="#d97706" opacity="0.55"/>
   <circle cx="24.5" cy="1.5" r="1.4" fill="#d97706" opacity="0.35"/>
