@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bt-smoker-v3';
+const CACHE_NAME = 'bt-smoker-v4';
 // Only cache '/' — the server returns index.html content at '/', so caching
 // '/index.html' separately creates a duplicate entry that races on refresh.
 const urlsToCache = [
@@ -6,6 +6,7 @@ const urlsToCache = [
   '/favicon.svg',
   '/icon-192.png',
   '/icon-512.png',
+  '/icon-maskable-512.png',
   '/apple-touch-icon.png',
   '/manifest.json',
   '/vendor/chart.umd.min.js'
@@ -41,7 +42,25 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Static shell: cache-first, refresh in background.
+  // HTML shell ('/' or navigation requests): network-first so index.html
+  // changes don't require a CACHE_NAME bump to reach users. Fall back to
+  // cache when the network is unreachable (offline PWA).
+  const isHtmlShell = url.pathname === '/' || event.request.mode === 'navigate';
+  if (isHtmlShell) {
+    event.respondWith(
+      fetch(event.request).then(response => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone))
+            .catch(err => console.warn('cache put failed', err));
+        }
+        return response;
+      }).catch(() => caches.match(event.request).then(c => c || caches.match('/')))
+    );
+    return;
+  }
+
+  // Static assets (icons, manifest, vendored libs): cache-first, refresh in background.
   event.respondWith(
     caches.match(event.request).then(cached => {
       const networkFetch = fetch(event.request).then(response => {

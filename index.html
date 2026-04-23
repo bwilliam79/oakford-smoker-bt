@@ -422,7 +422,9 @@ function clearChart() {
   chartLabels.length = 0;
   Object.values(DS).forEach(arr => arr.length = 0);
   chart.update();
-  fetch('/api/clear-history', { method: 'POST' });
+  fetch('/api/clear-history', { method: 'POST' })
+    .then(r => { if (!r.ok) log('ERROR', `Clear history failed: HTTP ${r.status}`, 'tag-error'); })
+    .catch(err => log('ERROR', `Clear history failed: ${err}`, 'tag-error'));
 }
 
 // ── Settings modal ────────────────────────────────────────────────────────────
@@ -763,6 +765,9 @@ function announce(msg) {
   // speechSynthesis is throttled/dropped without a prior user gesture in
   // Chrome/Safari. Skip rather than fire-and-forget into the void.
   if (!userInteracted || !('speechSynthesis' in window)) return;
+  // Cancel any queued utterances so a flurry of alarms doesn't leave the user
+  // listening to stale announcements for minutes after the event.
+  speechSynthesis.cancel();
   const utt = new SpeechSynthesisUtterance(msg);
   utt.rate = 0.95;
   speechSynthesis.speak(utt);
@@ -856,6 +861,16 @@ function connect() {
       return;
     }
     if (d.type === 'history') {
+      // Detect clock skew: if the newest server point is wildly ahead/behind
+      // the client wall clock, chart trimming (which uses Date.now()) will
+      // misbehave. Log once so the user knows to fix NTP.
+      if (d.data.length) {
+        const newestTs = d.data[d.data.length - 1].ts * 1000;
+        const skewMin  = Math.round((Date.now() - newestTs) / 60000);
+        if (Math.abs(skewMin) > 60) {
+          log('WARN', `Clock skew detected: server ${skewMin}min behind client. Chart trimming may be off.`, 'tag-warn');
+        }
+      }
       d.data.forEach(pt => pushChartPoint(pt, new Date(pt.ts * 1000), true));
       chart.update();
 
@@ -873,6 +888,9 @@ function connect() {
           }
           grillAtTempSince = atTempStart;
           const el = document.getElementById('grillAtTempTimer');
+          // Defensive: if a prior history message already started this interval,
+          // clear it first so we don't leak timers on reconnect.
+          if (grillAtTempTick) clearInterval(grillAtTempTick);
           grillAtTempTick = setInterval(() => {
             el.textContent = `At temp for ${formatDuration(Date.now() - grillAtTempSince)}`;
           }, 1000);

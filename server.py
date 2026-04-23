@@ -32,6 +32,7 @@ CONFIG_PATH        = Path('/data/config.json')
 STALL_WINDOW_SECS = 20 * 60   # how far back to look for a stall (20 min)
 STALL_THRESHOLD_F = 2.0       # °F range within stall window that counts as stalled
 PROBE_HISTORY_MAX_AGE_SECS = 4 * 60 * 60   # keep last 4h of probe points for ETA regression
+PROBE_HISTORY_STALE_SECS   = 10 * 60       # drop probe_history if newest point is older than this on reconnect
 
 # ── BLE reconnect backoff ────────────────────────────────────────────────────
 BACKOFF_START_SECS = 5
@@ -127,6 +128,7 @@ def _ntfy_post(topic: str, title: str, message: str, priority: str, tags: str):
         req = Request(f'https://ntfy.sh/{safe_topic}', data=message.encode(), method='POST')
         req.add_header('Title', title)
         req.add_header('Priority', priority)
+        req.add_header('User-Agent', 'bt-smoker-monitor/1.0')
         if tags:
             req.add_header('Tags', tags)
         with urlopen(req, timeout=5):
@@ -157,7 +159,6 @@ state    = {
     'smoker_online': False,
     'ip':            None,
     'address':       None,   # string address
-    'ble_device':    None,   # BLEDevice object from last scan
     'rssi':          None,
     'adapter':       None,
     'history':       [],
@@ -223,13 +224,27 @@ def load_config() -> dict:
     return {}
 
 def save_config(ntfy_topic: str, adapter: str = '') -> None:
-    """Persist ntfy_topic and adapter to CONFIG_PATH."""
+    """Persist ntfy_topic and adapter to CONFIG_PATH.
+
+    Read-modify-write so unrelated keys added by future features (or by a
+    hand-edit) aren't silently dropped on save.
+    """
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        data = {'ntfy_topic': ntfy_topic}
+        existing = {}
+        if CONFIG_PATH.exists():
+            try:
+                raw = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+                if isinstance(raw, dict):
+                    existing = raw
+            except Exception:
+                log.exception('Could not read existing config; will overwrite')
+        existing['ntfy_topic'] = ntfy_topic
         if adapter:
-            data['adapter'] = adapter
-        CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding='utf-8')
+            existing['adapter'] = adapter
+        else:
+            existing.pop('adapter', None)
+        CONFIG_PATH.write_text(json.dumps(existing, indent=2), encoding='utf-8')
     except Exception:
         log.exception('Could not write config file')
 
@@ -254,15 +269,16 @@ async def check_notifications(dec: dict):
     setpoint = dec['setPoint']
     n        = state['notified']
 
-    # Grill at temp
-    if not n['grill_at_temp'] and abs(grill - setpoint) <= 5 and grill <= setpoint + 5:
+    # Grill at temp — skip when setpoint is 0 (smoker off / cooldown) so a cold
+    # reading doesn't spuriously fire "at temperature".
+    if setpoint > 0 and not n['grill_at_temp'] and abs(grill - setpoint) <= 5:
         n['grill_at_temp'] = True
         await notify('Smoker at Temperature', f'Smoker reached {setpoint}°F set point.', tags='fire')
     if n['grill_at_temp'] and grill < setpoint - 10:
         n['grill_at_temp'] = False
 
     # Grill over temp
-    if not n['grill_over_temp'] and grill > setpoint + 5:
+    if setpoint > 0 and not n['grill_over_temp'] and grill > setpoint + 5:
         n['grill_over_temp'] = True
         await notify('⚠️ Smoker Over Temperature', f'Smoker is {grill}°F — set point is {setpoint}°F.',
                      priority='urgent', tags='rotating_light')
@@ -344,7 +360,6 @@ async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool
         await notify('Smoker Connected', 'Smoker monitor reconnected.', tags='white_check_mark')
         smoker_was_offline = False
 
-    state['ble_device'] = ble_device
     state['address']    = ble_device.address if ble_device else state['address']
     if rssi is not None:
         state['rssi'] = rssi
@@ -356,6 +371,11 @@ async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool
             state['probe_stalled'][i] = False
         else:
             ph = state['probe_history'][i]
+            # If the smoker was offline long enough that the newest stored point
+            # is stale (>10 min), drop it so ETA regression doesn't mix
+            # pre-outage and post-outage points into a garbage slope.
+            if ph and tick_time - ph[-1]['ts'] > PROBE_HISTORY_STALE_SECS:
+                ph.clear()
             ph.append({'temp': temp, 'ts': tick_time})
             ph_cutoff = tick_time - PROBE_HISTORY_MAX_AGE_SECS
             if ph and ph[0]['ts'] < ph_cutoff:
@@ -445,7 +465,7 @@ async def poll_loop(interval: int):
             await broadcast({'smoker_offline': True, 'connected': False})
             if not smoker_was_offline:
                 print('Smoker unreachable — will keep retrying.')
-                add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', tick_time)
+                add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', time.time())
                 await notify('Smoker Disconnected', 'Lost connection to smoker. Retrying…', tags='warning')
                 smoker_was_offline = True
         except Exception:
@@ -454,7 +474,7 @@ async def poll_loop(interval: int):
             await broadcast({'smoker_offline': True, 'connected': False})
             if not smoker_was_offline:
                 print('Smoker unreachable — will keep retrying.')
-                add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', tick_time)
+                add_log('WARN', 'Smoker unreachable — retrying…', 'tag-warn', time.time())
                 await notify('Smoker Disconnected', 'Lost connection to smoker. Retrying…', tags='warning')
                 smoker_was_offline = True
 
@@ -502,6 +522,10 @@ async def icon_512():
 async def apple_touch_icon():
     return Response(Path('apple-touch-icon.png').read_bytes(), media_type='image/png')
 
+@app.get('/icon-maskable-512.png')
+async def icon_maskable():
+    return Response(Path('icon-maskable-512.png').read_bytes(), media_type='image/png')
+
 VENDOR_DIR = Path(__file__).resolve().parent / 'vendor'
 
 @app.get('/vendor/{filename}')
@@ -516,17 +540,19 @@ async def vendor_asset(filename: str):
     if not candidate.is_file():
         return Response(status_code=404)
     media = 'application/javascript' if candidate.suffix == '.js' else 'application/octet-stream'
-    # Immutable: vendor files are pinned via SRI, so browsers can cache aggressively.
+    # 1-day cache + revalidate: vendor filenames aren't content-hashed, so
+    # `immutable` would strand clients on an old copy if we ever bump a version.
+    # The SRI integrity hash in index.html is the real guard against tampering.
     return Response(candidate.read_bytes(), media_type=media,
-                    headers={'Cache-Control': 'public, max-age=31536000, immutable'})
+                    headers={'Cache-Control': 'public, max-age=86400, must-revalidate'})
 
 @app.get('/api/state')
 async def api_state():
-    last = state['last'] or {}
-    # Always surface the current connection status on top of the cached payload.
-    if last:
-        last = dict(last)
-        last['connected'] = bool(state.get('smoker_online'))
+    # Always return a dict with an explicit `connected` key so clients can
+    # distinguish "never connected" (pre-first-reading) from "server returned
+    # an empty body".
+    last = dict(state['last']) if state['last'] else {}
+    last['connected'] = bool(state.get('smoker_online'))
     return last
 
 @app.get('/api/config')
@@ -652,9 +678,12 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.send_text(json.dumps(state['last']))
     try:
         while True:
-            # Any inbound frame (including FastAPI/Uvicorn protocol-level pings that
-            # arrive as text) refreshes the last-seen timestamp.
-            await ws.receive_text()
+            # Any inbound frame refreshes the last-seen timestamp. Use receive()
+            # rather than receive_text() so binary frames (rare but legal per
+            # spec — some PWA bridges and proxies emit them) don't crash us.
+            msg = await ws.receive()
+            if msg.get('type') == 'websocket.disconnect':
+                break
             clients[ws] = time.time()
     except WebSocketDisconnect:
         pass
