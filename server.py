@@ -8,7 +8,6 @@ import logging
 import argparse
 import math
 import os
-import subprocess
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -32,6 +31,7 @@ CONFIG_PATH        = Path('/data/config.json')
 # ── ETA / stall constants ─────────────────────────────────────────────────────
 STALL_WINDOW_SECS = 20 * 60   # how far back to look for a stall (20 min)
 STALL_THRESHOLD_F = 2.0       # °F range within stall window that counts as stalled
+PROBE_HISTORY_MAX_AGE_SECS = 4 * 60 * 60   # keep last 4h of probe points for ETA regression
 
 # ── BLE reconnect backoff ────────────────────────────────────────────────────
 BACKOFF_START_SECS = 5
@@ -202,10 +202,22 @@ async def broadcast(msg: dict):
 
 # ── Config file ───────────────────────────────────────────────────────────────
 def load_config() -> dict:
-    """Load ntfy_topic from CONFIG_PATH. Returns {} if missing or malformed."""
+    """Load ntfy_topic from CONFIG_PATH. Returns {} if missing or malformed.
+
+    Values are coerced to strings so downstream code (which expects str) can't
+    crash on an int/bool/None smuggled into the JSON file by hand-editing.
+    """
     try:
         if CONFIG_PATH.exists():
-            return json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+            raw = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+            if not isinstance(raw, dict):
+                log.warning('Config file is not a JSON object; ignoring')
+                return {}
+            out = {}
+            for key in ('ntfy_topic', 'adapter'):
+                if key in raw and raw[key] is not None:
+                    out[key] = str(raw[key]).strip()
+            return out
     except Exception:
         log.exception('Could not read config file')
     return {}
@@ -343,7 +355,11 @@ async def _process_reading(dec: dict, tick_time: float, smoker_was_offline: bool
             state['probe_eta'][i]     = None
             state['probe_stalled'][i] = False
         else:
-            state['probe_history'][i].append({'temp': temp, 'ts': tick_time})
+            ph = state['probe_history'][i]
+            ph.append({'temp': temp, 'ts': tick_time})
+            ph_cutoff = tick_time - PROBE_HISTORY_MAX_AGE_SECS
+            if ph and ph[0]['ts'] < ph_cutoff:
+                state['probe_history'][i] = [p for p in ph if p['ts'] >= ph_cutoff]
             eta_mins, stalled = compute_probe_eta(state['probe_history'][i], target, temp)
             state['probe_eta'][i]     = eta_mins
             state['probe_stalled'][i] = stalled
@@ -383,16 +399,19 @@ def _mark_disconnected():
     state['ip']   = None   # will be re-read on reconnect
     state['probe_eta']     = [None, None]
     state['probe_stalled'] = [False, False]
-    # Keep state['last'] around so /api/state clients know the last seen targets/etc.,
-    # but flip `connected` to False and null out live temps so UI can show "offline".
+    # Rebuild state['last'] as a new dict — the previous dict is shared with the last
+    # entry in state['history'] (see _process_reading), so mutating it in place would
+    # retroactively corrupt historical data.
     if state['last'] is not None:
-        last = state['last']
-        last['connected'] = False
-        last['grill']     = None
-        last['probes']    = [None, None]
-        last['rssi']      = None
-        last['eta']       = [None, None]
-        last['stalled']   = [False, False]
+        state['last'] = {
+            **state['last'],
+            'connected': False,
+            'grill':     None,
+            'probes':    [None, None],
+            'rssi':      None,
+            'eta':       [None, None],
+            'stalled':   [False, False],
+        }
 
 async def poll_loop(interval: int):
     smoker_was_offline = False
@@ -483,6 +502,24 @@ async def icon_512():
 async def apple_touch_icon():
     return Response(Path('apple-touch-icon.png').read_bytes(), media_type='image/png')
 
+VENDOR_DIR = Path(__file__).resolve().parent / 'vendor'
+
+@app.get('/vendor/{filename}')
+async def vendor_asset(filename: str):
+    # Locally-hosted third-party JS/CSS (e.g. chart.js). Resolve and confine to
+    # VENDOR_DIR so a crafted filename can't traverse outside it.
+    candidate = (VENDOR_DIR / filename).resolve()
+    try:
+        candidate.relative_to(VENDOR_DIR)
+    except ValueError:
+        return Response(status_code=404)
+    if not candidate.is_file():
+        return Response(status_code=404)
+    media = 'application/javascript' if candidate.suffix == '.js' else 'application/octet-stream'
+    # Immutable: vendor files are pinned via SRI, so browsers can cache aggressively.
+    return Response(candidate.read_bytes(), media_type=media,
+                    headers={'Cache-Control': 'public, max-age=31536000, immutable'})
+
 @app.get('/api/state')
 async def api_state():
     last = state['last'] or {}
@@ -540,13 +577,9 @@ async def get_adapters():
                     name = product
                 else:
                     name = ''
-                # Check if adapter is up via hciconfig (faster than parsing operstate)
-                up = False
-                try:
-                    result = subprocess.run(['hciconfig', hci_id], capture_output=True, text=True, timeout=3)
-                    up = 'UP RUNNING' in result.stdout
-                except Exception:
-                    log.exception(f'hciconfig lookup failed for {hci_id}')
+                # Check if adapter is up/running by reading rfkill + operstate from sysfs.
+                # Avoids shelling out to the deprecated hciconfig binary.
+                up = _is_adapter_up(hci_link)
                 adapters.append({'id': hci_id, 'name': name, 'up': up})
     except Exception:
         log.exception('Failed to enumerate adapters')
@@ -559,6 +592,18 @@ def _read_sysfs(path: Path) -> str:
         return path.read_text().strip()
     except Exception:
         return ''
+
+def _is_adapter_up(hci_link: Path) -> bool:
+    """Return True if the HCI adapter is powered and running."""
+    # /sys/class/bluetooth/hciX/flags is a hex bitfield; bit 0 == up, bit 4 == running.
+    flags_raw = _read_sysfs(hci_link / 'flags')
+    if flags_raw:
+        try:
+            flags = int(flags_raw, 16)
+            return bool(flags & 0x1) and bool(flags & 0x10)
+        except ValueError:
+            pass
+    return False
 
 @app.post('/api/ntfy-test')
 async def ntfy_test():
@@ -582,6 +627,17 @@ async def ntfy_test():
 async def clear_history():
     state['history'].clear()
     state['log_history'].clear()
+    # Drop per-probe ETA state too so post-clear ETAs aren't computed off
+    # pre-clear readings.
+    state['probe_history'] = [[], []]
+    state['probe_eta']     = [None, None]
+    state['probe_stalled'] = [False, False]
+    state['notified'] = {
+        'probe_at_temp':   [False, False],
+        'probe_over_temp': [False, False],
+        'grill_at_temp':   False,
+        'grill_over_temp': False,
+    }
     await broadcast({'type': 'clear_history'})
     return {'ok': True}
 
@@ -647,7 +703,6 @@ async def main(interval: int, port: int, address: str | None, adapter: str | Non
     if AUTH_TOKEN:
         print('Auth enabled: /api/* routes require X-Auth-Token header.')
     else:
-        log.warning('AUTH_TOKEN is not set — /api/* routes are unauthenticated. Set AUTH_TOKEN env var to require auth.')
         print('WARNING: AUTH_TOKEN not set — /api/* is open. Set AUTH_TOKEN in env to lock it down.')
 
     print(f'Starting web server on http://0.0.0.0:{port}')

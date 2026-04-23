@@ -1,12 +1,14 @@
-const CACHE_NAME = 'bt-smoker-v2';
+const CACHE_NAME = 'bt-smoker-v3';
+// Only cache '/' — the server returns index.html content at '/', so caching
+// '/index.html' separately creates a duplicate entry that races on refresh.
 const urlsToCache = [
   '/',
-  '/index.html',
   '/favicon.svg',
   '/icon-192.png',
   '/icon-512.png',
   '/apple-touch-icon.png',
-  '/manifest.json'
+  '/manifest.json',
+  '/vendor/chart.umd.min.js'
 ];
 
 self.addEventListener('install', event => {

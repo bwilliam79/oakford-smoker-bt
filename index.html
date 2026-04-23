@@ -12,7 +12,7 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="manifest" href="manifest.json">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="/vendor/chart.umd.min.js" integrity="sha384-Sse/HDqcypGpyTDpvZOJNnG0TT3feGQUkF9H+mnRvic+LjR+K1NhTt8f51KIQ3v3" crossorigin="anonymous"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -720,11 +720,26 @@ function clearOverTempAlarm(i) {
   overTempFired[i] = false;
 }
 
-// Single shared AudioContext — unlocked on any user interaction
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-document.addEventListener('click', () => audioCtx.resume());
+// AudioContext is created lazily on the first user gesture — Safari warns when
+// one is created at page load without an interaction, and Chrome keeps it
+// suspended anyway. `userInteracted` also gates speechSynthesis, which modern
+// browsers silently throttle before the first click/tap.
+let audioCtx = null;
+let userInteracted = false;
+
+function unlockAudio() {
+  userInteracted = true;
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audioCtx = new AC();
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+document.addEventListener('click',    unlockAudio, { once: false });
+document.addEventListener('touchend', unlockAudio, { once: false });
 
 async function playSiren(durationSec = 2.5) {
+  if (!audioCtx) return;   // no user interaction yet; browser would block anyway
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   const osc  = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -745,6 +760,9 @@ async function playSiren(durationSec = 2.5) {
 
 function announce(msg) {
   log('ALARM', msg, 'tag-alarm');
+  // speechSynthesis is throttled/dropped without a prior user gesture in
+  // Chrome/Safari. Skip rather than fire-and-forget into the void.
+  if (!userInteracted || !('speechSynthesis' in window)) return;
   const utt = new SpeechSynthesisUtterance(msg);
   utt.rate = 0.95;
   speechSynthesis.speak(utt);
@@ -808,6 +826,9 @@ function checkAlarms(d) {
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
+let wsReconnectDelay = 1000;        // grows exponentially up to WS_RECONNECT_MAX_MS on repeated failures
+const WS_RECONNECT_MIN_MS = 1000;
+const WS_RECONNECT_MAX_MS = 60000;
 function connect() {
   // Match the page's scheme: wss:// when served over HTTPS, ws:// otherwise.
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -818,6 +839,7 @@ function connect() {
   let smokerWasOffline = false;
 
   ws.onopen = () => {
+    wsReconnectDelay = WS_RECONNECT_MIN_MS;
     setStatus('connecting', 'Waiting for smoker…');
     setDashVisible(false);
     log('SYS', 'WebSocket connected.', 'tag-sys');
@@ -889,13 +911,16 @@ function connect() {
   };
 
   ws.onclose = () => {
-    setStatus('disconnected', 'Disconnected — reconnecting in 5s…');
-    log('WARN', 'WebSocket closed. Reconnecting…', 'tag-warn');
-    setTimeout(connect, 5000);
+    const secs = Math.round(wsReconnectDelay / 1000);
+    setStatus('disconnected', `Disconnected — reconnecting in ${secs}s…`);
+    log('WARN', `WebSocket closed. Reconnecting in ${secs}s…`, 'tag-warn');
+    setTimeout(connect, wsReconnectDelay);
+    // Exponential backoff with jitter so a down server doesn't get thundering-herd'd.
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX_MS);
   };
 
   ws.onerror = () => {
-    setStatus('disconnected', 'Connection error — reconnecting in 5s…');
+    setStatus('disconnected', 'Connection error — reconnecting…');
   };
 
   // No client-side keep-alive: FastAPI/Uvicorn sends protocol-level WebSocket
