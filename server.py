@@ -171,10 +171,16 @@ state    = {
     'probe_stalled': [False, False],
     # notification dedup
     'notified': {
-        'probe_at_temp':   [False, False],
-        'probe_over_temp': [False, False],
-        'grill_at_temp':   False,
-        'grill_over_temp': False,
+        'probe_at_temp':      [False, False],
+        'probe_over_temp':    [False, False],
+        'probe_under_temp':   [False, False],
+        # Sticky per-probe flag — set when a probe hits target so a later
+        # drop >10° below arms the under-temp alert. Reset on disconnect.
+        'probe_reached_once': [False, False],
+        'grill_at_temp':      False,
+        'grill_over_temp':    False,
+        'grill_under_temp':   False,
+        'grill_reached_once': False,
     },
 }
 
@@ -274,6 +280,12 @@ async def check_notifications(dec: dict):
     setpoint = dec['setPoint']
     n        = state['notified']
 
+    # Reset grill "reached once" sticky flag when the smoker is powered down
+    # (setpoint goes to 0) so the next cook starts fresh.
+    if setpoint <= 0:
+        n['grill_reached_once'] = False
+        n['grill_under_temp']   = False
+
     # Grill at temp — skip when setpoint is 0 (smoker off / cooldown) so a cold
     # reading doesn't spuriously fire "at temperature".
     if setpoint > 0 and not n['grill_at_temp'] and abs(grill - setpoint) <= 5:
@@ -281,6 +293,10 @@ async def check_notifications(dec: dict):
         await notify('Smoker at Temperature', f'Smoker reached {setpoint}°F set point.', tags='fire')
     if n['grill_at_temp'] and grill < setpoint - 10:
         n['grill_at_temp'] = False
+
+    # Grill reached-once sticky flag — used to arm the under-temp alert.
+    if setpoint > 0 and abs(grill - setpoint) <= 5:
+        n['grill_reached_once'] = True
 
     # Grill over temp
     if setpoint > 0 and not n['grill_over_temp'] and grill > setpoint + 5:
@@ -290,11 +306,24 @@ async def check_notifications(dec: dict):
     if n['grill_over_temp'] and grill <= setpoint + 5:
         n['grill_over_temp'] = False
 
+    # Grill under temp — only arms after the smoker has reached set point, and
+    # fires once when the reading drops >10° below. Resets when back within 5°.
+    if (setpoint > 0 and n['grill_reached_once']
+            and not n['grill_under_temp'] and grill < setpoint - 10):
+        n['grill_under_temp'] = True
+        await notify('⚠️ Smoker Under Temperature',
+                     f'Smoker dropped to {grill}°F — set point is {setpoint}°F.',
+                     priority='high', tags='warning')
+    if n['grill_under_temp'] and grill >= setpoint - 5:
+        n['grill_under_temp'] = False
+
     # Per-probe
     for i, (temp, target) in enumerate(zip(probes, targets)):
         if temp >= PROBE_DISCONNECTED or target >= PROBE_DISCONNECTED:
-            n['probe_at_temp'][i]   = False
-            n['probe_over_temp'][i] = False
+            n['probe_at_temp'][i]      = False
+            n['probe_over_temp'][i]    = False
+            n['probe_under_temp'][i]   = False
+            n['probe_reached_once'][i] = False
             continue
 
         if not n['probe_at_temp'][i] and temp >= target:
@@ -304,6 +333,9 @@ async def check_notifications(dec: dict):
         if n['probe_at_temp'][i] and temp < target - 5:
             n['probe_at_temp'][i] = False
 
+        if temp >= target:
+            n['probe_reached_once'][i] = True
+
         if not n['probe_over_temp'][i] and temp > target + 5:
             n['probe_over_temp'][i] = True
             await notify(f'⚠️ Probe {i + 1} Over Temperature',
@@ -311,6 +343,17 @@ async def check_notifications(dec: dict):
                          priority='urgent', tags='rotating_light')
         if n['probe_over_temp'][i] and temp <= target + 5:
             n['probe_over_temp'][i] = False
+
+        # Probe under temp — arms after the probe has reached target, fires once
+        # on the drop >10° below. Resets when probe climbs back within 5° of target.
+        if (n['probe_reached_once'][i] and not n['probe_under_temp'][i]
+                and temp < target - 10):
+            n['probe_under_temp'][i] = True
+            await notify(f'⚠️ Probe {i + 1} Under Temperature',
+                         f'Probe {i + 1} dropped to {temp}°F — target is {target}°F.',
+                         priority='high', tags='warning')
+        if n['probe_under_temp'][i] and temp >= target - 5:
+            n['probe_under_temp'][i] = False
 
 # ── BLE polling loop ──────────────────────────────────────────────────────────
 async def scan_and_read() -> tuple[dict | None, object | None, int | None]:
@@ -669,10 +712,14 @@ async def clear_history():
     state['probe_eta']     = [None, None]
     state['probe_stalled'] = [False, False]
     state['notified'] = {
-        'probe_at_temp':   [False, False],
-        'probe_over_temp': [False, False],
-        'grill_at_temp':   False,
-        'grill_over_temp': False,
+        'probe_at_temp':      [False, False],
+        'probe_over_temp':    [False, False],
+        'probe_under_temp':   [False, False],
+        'probe_reached_once': [False, False],
+        'grill_at_temp':      False,
+        'grill_over_temp':    False,
+        'grill_under_temp':   False,
+        'grill_reached_once': False,
     }
     await broadcast({'type': 'clear_history'})
     return {'ok': True}

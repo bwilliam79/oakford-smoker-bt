@@ -673,9 +673,17 @@ function displayEta(index, etaMins, stalled, target) {
 const alarmFired        = [false, false];
 const overTempFired     = [false, false];
 const overTempInterval  = [null,  null];
+const underTempFired    = [false, false];
+const underTempInterval = [null,  null];
+// reachedOnce is sticky — stays true after a probe hits target so a later drop
+// below -10 triggers the under-temp alert. Resets on probe/target disconnect.
+const reachedOnce       = [false, false];
 let   grillAlarmFired      = false;
 let   grillOverTempFired   = false;
 let   grillOverTempInterval = null;
+let   grillUnderTempFired   = false;
+let   grillUnderTempInterval = null;
+let   grillReachedOnce      = false;
 let   grillAtTempSince  = null;   // timestamp when smoker first reached target
 let   grillAtTempTick   = null;   // setInterval handle
 
@@ -741,6 +749,30 @@ function clearOverTempAlarm(i) {
   overTempFired[i] = false;
 }
 
+function startUnderTempAlarm(i) {
+  if (underTempInterval[i]) return;
+  playSiren();
+  underTempInterval[i] = setInterval(playSiren, 30_000);
+}
+
+function clearUnderTempAlarm(i) {
+  clearInterval(underTempInterval[i]);
+  underTempInterval[i] = null;
+  underTempFired[i] = false;
+}
+
+function startGrillUnderTempAlarm() {
+  if (grillUnderTempInterval) return;
+  playSiren();
+  grillUnderTempInterval = setInterval(playSiren, 30_000);
+}
+
+function clearGrillUnderTempAlarm() {
+  clearInterval(grillUnderTempInterval);
+  grillUnderTempInterval = null;
+  grillUnderTempFired    = false;
+}
+
 // AudioContext is created lazily on the first user gesture — Safari warns when
 // one is created at page load without an interaction, and Chrome keeps it
 // suspended anyway. `userInteracted` also gates speechSynthesis, which modern
@@ -755,9 +787,19 @@ function unlockAudio() {
     if (AC) audioCtx = new AC();
   }
   if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  // Browsers only honour Notification.requestPermission() from inside a user
+  // gesture; piggyback on the same unlock that enables audio.
+  if ('Notification' in window && Notification.permission === 'default') {
+    try { Notification.requestPermission(); } catch {}
+  }
 }
 document.addEventListener('click',    unlockAudio, { once: false });
 document.addEventListener('touchend', unlockAudio, { once: false });
+
+function showNotif(title, body, tag) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try { new Notification(title, { body, tag, icon: '/icon-192.png' }); } catch {}
+}
 
 async function playSiren(durationSec = 2.5) {
   if (!audioCtx) return;   // no user interaction yet; browser would block anyway
@@ -798,19 +840,34 @@ function checkAlarms(d) {
   // doesn't announce "reached set temperature of 0 degrees". Mirrors the
   // server-side setpoint > 0 guard in check_notifications.
   if (d.setPoint <= 0) {
-    if (grillOverTempFired) clearGrillOverTempAlarm();
+    if (grillOverTempFired)  clearGrillOverTempAlarm();
+    if (grillUnderTempFired) clearGrillUnderTempAlarm();
     grillOverTempFired = false;
     grillAlarmFired    = false;
+    grillReachedOnce   = false;
     stopGrillAtTempTimer();
     document.getElementById('grillAtTempTimer').textContent = '';
   } else {
-    // Smoker alarm
+    // Smoker over-temp
     if (!grillOverTempFired && d.grill > d.setPoint + 5) {
       grillOverTempFired = true;
       startGrillOverTempAlarm();
+      showNotif('⚠️ Smoker Over Temperature',
+                `Smoker is ${d.grill}°F — set point is ${d.setPoint}°F.`, 'grill-over');
     }
     if (grillOverTempFired && d.grill <= d.setPoint + 5) {
       clearGrillOverTempAlarm();
+    }
+    // Smoker under-temp: only after having reached set point; fires when >10° below.
+    if (grillReachedOnce && !grillUnderTempFired && d.grill < d.setPoint - 10) {
+      grillUnderTempFired = true;
+      startGrillUnderTempAlarm();
+      announce(`Warning. The smoker has dropped below its set temperature.`);
+      showNotif('⚠️ Smoker Under Temperature',
+                `Smoker dropped to ${d.grill}°F — set point is ${d.setPoint}°F.`, 'grill-under');
+    }
+    if (grillUnderTempFired && d.grill >= d.setPoint - 5) {
+      clearGrillUnderTempAlarm();
     }
   }
 
@@ -818,11 +875,14 @@ function checkAlarms(d) {
   const grillUnderTemp = d.setPoint > 0 && !grillOverTempFired && d.grill < d.setPoint - 5;
 
   if (grillAtTemp) {
+    grillReachedOnce = true;
     startGrillAtTempTimer();
     document.getElementById('grillAtTempTimer').style.cssText = '';
     if (!grillAlarmFired) {
       grillAlarmFired = true;
       announce(`The smoker has reached its set temperature of ${d.setPoint} degrees.`);
+      showNotif('Smoker at Temperature',
+                `Smoker reached ${d.setPoint}°F set point.`, 'grill-at');
     }
   } else if (grillUnderTemp) {
     stopGrillAtTempTimer();
@@ -843,20 +903,41 @@ function checkAlarms(d) {
   // Probe alarms
   d.probes.forEach((temp, i) => {
     const target = d.probeTargets[i];
-    if (temp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) return;
+    if (temp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) {
+      if (underTempFired[i]) clearUnderTempAlarm(i);
+      reachedOnce[i] = false;
+      return;
+    }
 
     if (!alarmFired[i] && temp >= target) {
-      alarmFired[i] = true;
+      alarmFired[i]  = true;
+      reachedOnce[i] = true;
       announce(`Probe ${i + 1} has reached its target temperature of ${target} degrees.`);
+      showNotif(`Probe ${i + 1} at Temperature`,
+                `Probe ${i + 1} reached ${target}°F.`, `probe${i + 1}-at`);
     }
     if (alarmFired[i] && temp < target - 5) alarmFired[i] = false;
 
     if (!overTempFired[i] && temp > target + 5) {
       overTempFired[i] = true;
       startOverTempAlarm(i);
+      showNotif(`⚠️ Probe ${i + 1} Over Temperature`,
+                `Probe ${i + 1} is ${temp}°F — target is ${target}°F.`, `probe${i + 1}-over`);
     }
     if (overTempFired[i] && temp <= target + 5) {
       clearOverTempAlarm(i);
+    }
+
+    // Under-temp: fires once on the drop below target-10 after having reached target.
+    if (reachedOnce[i] && !underTempFired[i] && temp < target - 10) {
+      underTempFired[i] = true;
+      startUnderTempAlarm(i);
+      announce(`Warning. Probe ${i + 1} has dropped below its target temperature.`);
+      showNotif(`⚠️ Probe ${i + 1} Under Temperature`,
+                `Probe ${i + 1} dropped to ${temp}°F — target is ${target}°F.`, `probe${i + 1}-under`);
+    }
+    if (underTempFired[i] && temp >= target - 5) {
+      clearUnderTempAlarm(i);
     }
   });
 }
@@ -947,17 +1028,30 @@ function connect() {
         // setPoint <= 0 means the smoker is off/cooling down — leave grill
         // alarm flags cleared so we don't misfire on the next live tick.
         if (latest.setPoint > 0) {
-          grillAlarmFired    = Math.abs(latest.grill - latest.setPoint) <= 5;
-          grillOverTempFired = latest.grill > latest.setPoint + 5;
+          grillAlarmFired     = Math.abs(latest.grill - latest.setPoint) <= 5;
+          grillOverTempFired  = latest.grill > latest.setPoint + 5;
+          // Best-effort: treat "within band of target" as having reached it.
+          // False negatives just mean the under-temp siren waits for the next
+          // at-temp event before arming; safer than a spurious fire on reload.
+          grillReachedOnce    = latest.grill >= latest.setPoint - 5;
+          grillUnderTempFired = grillReachedOnce && latest.grill < latest.setPoint - 10;
         } else {
-          grillAlarmFired    = false;
-          grillOverTempFired = false;
+          grillAlarmFired     = false;
+          grillOverTempFired  = false;
+          grillReachedOnce    = false;
+          grillUnderTempFired = false;
         }
         latest.probes.forEach((temp, i) => {
           const target = latest.probeTargets[i];
-          if (temp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) return;
-          alarmFired[i]    = temp >= target;
-          overTempFired[i] = temp > target + 5;
+          if (temp >= PROBE_DISCONNECTED || target >= PROBE_DISCONNECTED) {
+            reachedOnce[i]    = false;
+            underTempFired[i] = false;
+            return;
+          }
+          alarmFired[i]     = temp >= target;
+          overTempFired[i]  = temp > target + 5;
+          reachedOnce[i]    = temp >= target - 5;
+          underTempFired[i] = reachedOnce[i] && temp < target - 10;
         });
         updateDash(latest);
       }
